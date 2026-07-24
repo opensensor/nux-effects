@@ -237,11 +237,12 @@ pending slot before fallback, rolls back after three unconfirmed boots, and
 enters recovery on journal or dual-slot failure. Forced recovery is sampled
 before lifecycle preparation, so entering recovery never consumes a trial.
 
-A magic/inverse one-shot mailbox is reserved at `0x20000000` for
-application-requested recovery after a warm reset. Retention across the
-selected RT1051 reset source remains a target test. Live switching among
-Delay, Reverb, Modulation, and Drive remains application RAM state and does
-not use this mailbox or write flash.
+A magic/inverse one-shot mailbox uses retained `SRC_GPR8`/`SRC_GPR9`
+(`0x400f803c–0x400f8043`) for application-requested recovery after a warm
+reset. The MCUXpresso SDK documents SRC GPR retention through reset, and the
+factory-engine zero-wear prototype has validated it with `NVIC_SystemReset`
+on this pedal. Live switching among Delay, Reverb, Modulation, and Drive
+remains application RAM state and does not use this mailbox or write flash.
 
 ## 6. Unified pedal application
 
@@ -663,15 +664,19 @@ the C ABI between bootloader, platform, and application.
 ## 13. Immediate next work package
 
 Do not replace the bootloader yet. The repository, pinned SDK, guarded image
-packer, A/B policy, open recovery protocol, USB adapter, and RAM-resident NOR
-adapter now exist and pass their offline gates. The next implementation
-session should:
+packer, A/B policy, open recovery protocol, USB adapter, RAM-resident NOR
+adapter, and minimal RT1051 board adapter now exist and pass their offline
+gates. The combined integration is deliberately linked without a reset
+vector so it cannot be mistaken for a hardware-approved boot image. The next
+implementation session should:
 
-1. Build the RT1051 board clock, USB PHY, interrupt, reset, and confirmed
-   recovery-footswitch wrapper.
-2. Assign a non-NUX USB development VID/PID.
-3. Enumerate a RAM/debug recovery image and exercise only `GET_INFO`.
-4. Prove the DTCM software-recovery mailbox survives the chosen warm reset.
+1. Assign a legitimate non-NUX USB development VID/PID.
+2. Build a RAM/debug recovery image and validate only early input sampling,
+   USB1 clocks/PHY/IRQ, and `GET_INFO`.
+3. Confirm the recovered GPIO1_IO21/GPIO3_IO02 pads on target without
+   driving any GPIO outputs.
+4. Revalidate the SRC GPR recovery mailbox across the exact open warm-reset
+   path.
 5. Validate erase/program/readback on one sacrificial application sector.
 6. Power-cut the two-sector journal at every mutation boundary.
 7. Add watchdog-backed application confirmation and hard-fault rollback.

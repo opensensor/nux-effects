@@ -21,15 +21,19 @@ Implemented:
 - a host-tested boot controller that journals trials before loading,
   durably rejects bad pending images, falls back once, and enters recovery
   on journal or image failure;
-- a fixed, one-shot DTCM software-recovery mailbox shared by both linker
-  scripts, plus an application-facing arm API;
+- a fixed, one-shot software-recovery mailbox in retained SRC GPR8/GPR9,
+  plus an application-facing arm API;
 - vector, stack, size, board, and load-address checks;
 - range-confined 64-byte open recovery packet format;
 - host-tested inactive-slot update transaction and retry behavior;
 - `pedalctl.py` host packet/client implementation;
 - a compile-checked RT1051 EHCI/HID adapter for 64-byte `NXFX` reports;
+- an opt-in RT1051 board adapter for the recovered boot inputs, USB1
+  clocks/PHY/IRQ, and warm reset;
 - a host-tested NOR mutation policy and compile/link-checked RT1051
   FlexSPI adapter with an ITCM-only command call graph;
+- a combined, deliberately nonbootable hardware link probe joining the board,
+  USB, FlexSPI, recovery, and journal layers;
 - a tested adapter from that NOR policy to the recovery engine and
   power-loss-safe boot journal;
 - a guarded full-chip packer that starts from the verified factory dump;
@@ -37,8 +41,8 @@ Implemented:
 
 Not implemented:
 
-- footswitch recovery input;
-- USB clock/PHY/IRQ board wrapper and a project USB VID/PID;
+- physical validation of the recovered footswitch input wrapper;
+- a project USB VID/PID;
 - physical validation of FlexSPI erase/program on a sacrificial sector;
 - hardware-backed journal mutation and USB recovery entry from
   `bootloader_main`;
@@ -113,6 +117,30 @@ python3 tools/check_ramfunc.py \
 
 The link probe is not a bootable firmware image. It exists to prove the
 complete flash-busy call graph is resident in ITCM.
+
+The board, USB, and FlexSPI paths can also be compiled and linked together
+without a reset vector or boot entry:
+
+```sh
+cmake -S firmware -B build/open-hardware-probe -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_MCUX_BOARD_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_USB_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_FLEXSPI_ADAPTER=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/open-hardware-probe \
+  --target ncr2_hardware_link_probe
+python3 tools/check_ramfunc.py \
+  build/open-hardware-probe/ncr2_hardware_link_probe.elf
+python3 tools/check_hardware_probe.py \
+  build/open-hardware-probe/ncr2_hardware_link_probe.elf
+```
+
+The checker requires every board/USB/NOR integration symbol while rejecting
+a reset handler or vector table. Passing it is a compile/link gate, not
+permission to flash.
 
 ## Decode the verified stock boot configuration
 

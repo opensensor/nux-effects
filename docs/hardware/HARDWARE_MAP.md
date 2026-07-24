@@ -36,7 +36,7 @@ pad assignments are not yet all confirmed:
 
 | Function | Candidate/inference | Status | Required evidence |
 |---|---|---|---|
-| DFU footswitch | boot test includes GPIO1_IO21 and GPIO3_IO02 | partial | continuity or controlled register observation |
+| DFU footswitch | active-low GPIO1_IO21 on `GPIO_AD_B1_05`, guarded by active-high GPIO3_IO02 on `GPIO_SD_B1_02` | source-confirmed early-boot behavior; PCB continuity pending | continuity or controlled register observation |
 | second footswitch | unknown | unresolved | continuity/register observation |
 | step knob | ADC/ADC_ETC channel unknown | unresolved | controlled ADC trace |
 | remaining knobs | ADC channels unknown | unresolved | controlled ADC trace |
@@ -47,6 +47,11 @@ pad assignments are not yet all confirmed:
 The failed binary monitor experiment is specifically evidence that
 GPIO1_IO21 must not be treated as the runtime switch mapping without another
 measurement.
+
+The opt-in open board adapter intentionally uses this pair only for the
+recovery condition sampled at startup. It configures both pads as inputs with
+100 kOhm pull-ups and hysteresis, and contains no GPIO output writes. This
+does not promote either pin to a runtime footswitch mapping.
 
 ## Audio interface measurements required
 
@@ -81,4 +86,5 @@ measurement.
   `firmware/platform/ncr2/boot/stock_boot_config.json`
 - Full source architecture:
   `PROGRAMMABLE_PEDAL_PLAN.md`
-
+- Opt-in source board wrapper:
+  `firmware/platform/ncr2/board/ncr2_board.c`

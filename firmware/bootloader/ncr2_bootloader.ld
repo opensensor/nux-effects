@@ -4,8 +4,7 @@ MEMORY
 {
     FLASH (rx)  : ORIGIN = 0x60002000, LENGTH = 0x0001E000
     ITCM  (rwx) : ORIGIN = 0x00000000, LENGTH = 0x00020000
-    MAILBOX (rw): ORIGIN = 0x20000000, LENGTH = 0x00000010
-    DTCM  (rwx) : ORIGIN = 0x20000010, LENGTH = 0x0001FFF0
+    DTCM  (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00020000
 }
 
 SECTIONS
@@ -70,13 +69,6 @@ SECTIONS
         __bss_end = .;
     } > DTCM
 
-    .boot_mailbox (NOLOAD) :
-    {
-        . = ALIGN(8);
-        KEEP(*(.boot_mailbox))
-        . = ALIGN(8);
-    } > MAILBOX
-
     .noinit (NOLOAD) :
     {
         . = ALIGN(4);
@@ -102,8 +94,6 @@ SECTIONS
            "bootloader exceeds protected flash region")
     ASSERT(__ramfunc_end <= ORIGIN(ITCM) + LENGTH(ITCM),
            "RAM-resident flash call graph exceeds ITCM")
-    ASSERT(SIZEOF(.boot_mailbox) <= LENGTH(MAILBOX),
-           "boot mailbox exceeds its fixed DTCM reservation")
     ASSERT(DEFINED(FLEXSPI_ReadBlocking) ?
            (FLEXSPI_ReadBlocking >= ORIGIN(ITCM) &&
             FLEXSPI_ReadBlocking < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,

@@ -63,9 +63,12 @@ Development is now moving to an independent bootloader, board-support
 package, deterministic audio engine, and original/open DSP implementations.
 The guarded A/B recovery transaction and matching host client are now
 implemented under host tests. The 64-byte USB HID adapter now compile-checks
-against the pinned RT1051 MCUX SDK; board clock/IRQ integration and the
-RAM-resident FlexSPI backend now compile/link-check independently. Both
-remain disconnected from the boot path behind the no-flash hardware gate.
+against the pinned RT1051 MCUX SDK. A minimal board wrapper now source-defines
+the recovered early-boot inputs, USB1 clock/PHY/IRQ setup, and warm reset;
+the RAM-resident FlexSPI backend is also compile/link-checked. A deliberately
+nonbootable integration probe joins all three without a vector table or reset
+entry. They remain disconnected from the boot path behind the no-flash
+hardware gate.
 The boot decision controller itself is now integrated with a deliberately
 read-only backend and host-tested for forced recovery, pending trials,
 immediate rejection, rollback, and emergency slot fallback.

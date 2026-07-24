@@ -29,9 +29,14 @@
 
 #define NCR2_DTCM_START UINT32_C(0x20000000)
 #define NCR2_DTCM_END UINT32_C(0x20020000)
-#define NCR2_BOOT_MAILBOX_ADDRESS NCR2_DTCM_START
-#define NCR2_BOOT_MAILBOX_SIZE UINT32_C(0x00000010)
-#define NCR2_DTCM_USABLE_START \
-    (NCR2_DTCM_START + NCR2_BOOT_MAILBOX_SIZE)
+
+/*
+ * SRC GPR8 and GPR9. The RT1051 reference SDK documents SRC GPR values
+ * as retained during reset. They form the magic/inverse warm-reset
+ * recovery request and are unrelated to flash layout despite living in
+ * this shared platform-address header.
+ */
+#define NCR2_BOOT_MAILBOX_ADDRESS UINT32_C(0x400F803C)
+#define NCR2_BOOT_MAILBOX_SIZE UINT32_C(0x00000008)
 
 #endif

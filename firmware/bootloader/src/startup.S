@@ -10,7 +10,14 @@
 g_boot_vectors:
     .word __stack_top
     .word Reset_Handler
-    .rept 174
+    /* Core vectors 2..15 and external IRQs 0..112. */
+    .rept 127
+    .word Default_Handler
+    .endr
+    /* External IRQ 113: USB OTG1. */
+    .word USB_OTG1_IRQHandler
+    /* External IRQs 114..159. */
+    .rept 46
     .word Default_Handler
     .endr
 .size g_boot_vectors, . - g_boot_vectors
@@ -64,3 +71,6 @@ Reset_Handler:
 Default_Handler:
     b .
 .size Default_Handler, . - Default_Handler
+
+.weak USB_OTG1_IRQHandler
+.thumb_set USB_OTG1_IRQHandler, Default_Handler

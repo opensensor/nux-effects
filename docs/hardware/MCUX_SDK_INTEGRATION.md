@@ -92,11 +92,32 @@ cmake --build build/open-usb --target ncr2_mcux_usb_adapter
 ```
 
 This is deliberately an object-library compile gate, not a flashable image.
-The board-specific USB clock, PHY initialization, interrupt-vector wrapper,
-MPU setup, and a flash backend must be completed before it is linked into
-the recovery boot path. With the default compile definitions, the adapter's
-VID and PID are zero and `ncr2_recovery_usb_start` returns
+With the default compile definitions, the adapter's VID and PID are zero and
+`ncr2_recovery_usb_start` returns
 `NCR2_RECOVERY_USB_UNASSIGNED_ID`; it cannot enumerate accidentally.
+
+## Minimal board wrapper
+
+The opt-in board adapter now provides only the hardware needed for an early
+recovery proof:
+
+- samples active-low GPIO1_IO21 on `GPIO_AD_B1_05` while requiring
+  GPIO3_IO02 on `GPIO_SD_B1_02` to remain high;
+- configures those pads as inputs with 100 kOhm pull-ups and hysteresis;
+- enables the USB1 480 MHz PHY PLL and controller clock;
+- initializes EHCI PHY0 with the trims used by the pinned reference;
+- enables `USB_OTG1_IRQn` at priority 3 and dispatches it to the open USB
+  adapter; and
+- requests warm reset with `NVIC_SystemReset`.
+
+It contains no LED, bypass, mute, audio, or other GPIO output writes. The
+GPIO pair is source-confirmed for the stock early-boot condition but still
+requires PCB continuity or controlled target observation before a full-chip
+image can pass the hardware gate.
+
+The open bootloader vector table now contains the USB OTG1 vector at RT1051
+external IRQ 113. The handler remains a weak default unless the opt-in board
+adapter is explicitly linked.
 
 ## Clock, MPU, and memory requirements
 
@@ -169,14 +190,41 @@ The MCUX FlexSPI adapter is still not wired to that controller or the USB
 recovery engine, and no erase/program command has been issued to the physical
 pedal.
 
+## Combined hardware integration probe
+
+Enable all three adapters to compile and link the complete board, USB,
+recovery engine, boot journal, NOR policy, and FlexSPI dependency graph:
+
+```sh
+cmake -S firmware -B build/open-hardware-probe -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_MCUX_BOARD_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_USB_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_FLEXSPI_ADAPTER=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/open-hardware-probe \
+  --target ncr2_hardware_link_probe
+python3 tools/check_ramfunc.py \
+  build/open-hardware-probe/ncr2_hardware_link_probe.elf
+python3 tools/check_hardware_probe.py \
+  build/open-hardware-probe/ncr2_hardware_link_probe.elf
+```
+
+This ELF intentionally has no vector table or reset handler, and its entry is
+the recovery-input initializer rather than a reset path. The checker rejects
+any accidental boot structure while requiring all integration symbols. It
+proves source completeness only; it is not a flashable image.
+
 ## Next hardware gates
 
 Before any full-chip open image is approved:
 
 1. assign a legitimate project/community USB identity;
-2. enumerate the open HID stack from a RAM/debug build;
-3. prove GET_INFO without any flash mutation;
-4. identify and test the physical recovery footswitch from source;
+2. verify the two early-recovery input pads on target;
+3. enumerate the open HID stack from a RAM/debug build;
+4. prove GET_INFO without any flash mutation;
 5. erase/program/read back a sacrificial sector in an open application slot;
 6. persist and scan boot-state records across interrupted writes;
 7. validate pending-trial rollback with a watchdog; and

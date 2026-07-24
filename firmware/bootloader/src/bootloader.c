@@ -22,9 +22,6 @@ enum boot_diagnostic_code {
 volatile uint32_t g_boot_diagnostic
     __attribute__((section(".noinit")));
 
-boot_recovery_mailbox_t g_boot_recovery_mailbox
-    __attribute__((section(".boot_mailbox")));
-
 static void data_sync_barrier(void)
 {
     __asm volatile("dsb 0xf" ::: "memory");
@@ -251,7 +248,9 @@ void bootloader_main(void)
         .program = metadata_program_disabled,
     };
     boot_recovery_request_t recovery_request = {
-        .mailbox = &g_boot_recovery_mailbox,
+        .mailbox =
+            (boot_recovery_mailbox_t *)(uintptr_t)
+                NCR2_BOOT_MAILBOX_ADDRESS,
         .physical_context = NULL,
         .physical_asserted = NULL,
     };

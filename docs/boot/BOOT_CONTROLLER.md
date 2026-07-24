@@ -26,9 +26,9 @@ destination image has already passed both source and destination validation.
 
 ## One-shot recovery mailbox
 
-The first 16 bytes of DTCM (`0x20000000–0x2000000f`) are reserved in both
-linker scripts. The current mailbox is an eight-byte magic/inverse pair.
-Application code can arm it with:
+The mailbox uses two retained System Reset Controller registers:
+`SRC_GPR8` at `0x400f803c` and `SRC_GPR9` at `0x400f8040`. The current
+token is an eight-byte magic/inverse pair. Application code can arm it with:
 
 ```c
 #include "ncr2_boot_request.h"
@@ -41,11 +41,12 @@ The bootloader consumes and clears valid and partial tokens. A partial write
 cannot accidentally match the 64-bit pair, and a deliberate recovery entry
 does not spend an A/B trial.
 
-Whether this DTCM range survives every intended RT1051 reset source still
-requires a hardware test. The open application must use only a validated
-warm-reset path; cold power-on should normally clear the practical intent of
-the mailbox even though the cryptographic-strength magic check is also the
-guard against random SRAM contents.
+The pinned MCUXpresso SDK documents SRC GPR values as retained through the
+reset process and permits arbitrary values in GPRs other than the two
+reserved wake registers. The factory-engine zero-wear prototype has also
+demonstrated SRC GPR retention through `NVIC_SystemReset` on this pedal. The
+open bootloader still consumes the token only once and validates both words,
+so unrelated reset state cannot become a recovery request accidentally.
 
 ## Hardware gate
 
@@ -54,8 +55,10 @@ program callbacks intentionally fail. This lets ordinary confirmed-slot
 selection use the tested controller without making the image capable of
 mutating NOR.
 
-The compile-checked FlexSPI and USB adapters remain disconnected. Pending
-trial persistence, physical recovery input, and USB recovery become
-functional only after a board clock/PHY/GPIO/IRQ wrapper passes the documented
-hardware gates. Until then, a controller recovery decision stops in the
-bootloader diagnostic loop.
+The compile-checked FlexSPI, USB, and board adapters remain disconnected from
+the default boot image. The board adapter configures only the two recovered
+early-boot input pads, USB1 clocks/PHY/IRQ, and warm reset. The combined
+nonbootable link probe proves all three adapters resolve together, but
+pending-trial persistence and USB recovery become hardware-approved only
+after the documented target gates pass. Until then, a controller recovery
+decision stops in the bootloader diagnostic loop.

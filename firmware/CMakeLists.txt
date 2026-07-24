@@ -16,6 +16,11 @@ option(
     "Compile-check the RT1051 RAM-resident FlexSPI NOR adapter"
     OFF
 )
+option(
+    NCR2_BUILD_MCUX_BOARD_ADAPTER
+    "Compile-check the RT1051 GPIO/USB/reset board adapter"
+    OFF
+)
 set(
     NCR2_MCUX_SDK_ROOT
     ""
@@ -323,6 +328,178 @@ if(NCR2_BUILD_MCUX_FLEXSPI_ADAPTER)
     )
     set_target_properties(
         ncr2_flexspi_link_probe
+        PROPERTIES SUFFIX ".elf"
+    )
+endif()
+
+if(NCR2_BUILD_MCUX_BOARD_ADAPTER)
+    if(NOT EXISTS
+       "${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/MIMXRT1051.h")
+        message(
+            FATAL_ERROR
+            "NCR2_MCUX_SDK_ROOT is not a pinned MCUX SDK workspace"
+        )
+    endif()
+
+    add_library(
+        ncr2_mcux_board_adapter
+        OBJECT
+        platform/ncr2/board/ncr2_board.c
+    )
+    target_include_directories(
+        ncr2_mcux_board_adapter
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/board
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/usb
+    )
+    target_include_directories(
+        ncr2_mcux_board_adapter
+        SYSTEM PRIVATE
+            ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio
+            ${NCR2_MCUX_SDK_ROOT}/core/components/lists
+            ${NCR2_MCUX_SDK_ROOT}/core/components/osa
+            ${NCR2_MCUX_SDK_ROOT}/middleware/usb/include
+            ${NCR2_MCUX_SDK_ROOT}/middleware/usb/phy
+    )
+    target_compile_definitions(
+        ncr2_mcux_board_adapter
+        PRIVATE
+            CPU_MIMXRT1051DVL6B
+    )
+    target_compile_options(
+        ncr2_mcux_board_adapter
+        PRIVATE
+            ${NCR2_CPU_FLAGS}
+            -ffreestanding
+            -fno-builtin
+            -fdata-sections
+            -ffunction-sections
+            -fno-common
+            -Wall
+            -Wextra
+            -Werror
+            -Wconversion
+            -Wshadow
+            -Wundef
+    )
+endif()
+
+if(NCR2_BUILD_MCUX_USB_ADAPTER AND
+   NCR2_BUILD_MCUX_FLEXSPI_ADAPTER AND
+   NCR2_BUILD_MCUX_BOARD_ADAPTER)
+    set(
+        NCR2_BOARD_VENDOR_SOURCES
+        ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers/fsl_clock.c
+        ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio/fsl_gpio.c
+    )
+    add_executable(
+        ncr2_hardware_link_probe
+        EXCLUDE_FROM_ALL
+        bootloader/src/boot_journal.c
+        bootloader/src/boot_recovery_request.c
+        bootloader/src/boot_state.c
+        bootloader/src/crc32.c
+        bootloader/src/recovery_engine.c
+        bootloader/src/recovery_protocol.c
+        bootloader/src/recovery_storage.c
+        bootloader/src/sha256.c
+        platform/ncr2/board/ncr2_board.c
+        platform/ncr2/flexspi/ncr2_flexspi_nor.c
+        platform/ncr2/src/ncr2_nor.c
+        platform/ncr2/usb/recovery_usb.c
+        platform/ncr2/usb/recovery_usb_descriptor.c
+        ${NCR2_BOARD_VENDOR_SOURCES}
+        ${NCR2_FLEXSPI_VENDOR_SOURCE}
+        ${NCR2_USB_VENDOR_SOURCES}
+    )
+    target_include_directories(
+        ncr2_hardware_link_probe
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/board
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/flexspi
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/usb
+    )
+    target_include_directories(
+        ncr2_hardware_link_probe
+        SYSTEM PRIVATE
+            ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/flexspi
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio
+            ${NCR2_MCUX_SDK_ROOT}/core/components/lists
+            ${NCR2_MCUX_SDK_ROOT}/core/components/osa
+            ${NCR2_USB_MIDDLEWARE}/include
+            ${NCR2_USB_MIDDLEWARE}/device
+            ${NCR2_USB_MIDDLEWARE}/phy
+            ${NCR2_USB_OUTPUT}
+            ${NCR2_USB_OUTPUT}/class
+    )
+    target_compile_definitions(
+        ncr2_hardware_link_probe
+        PRIVATE
+            CPU_MIMXRT1051DVL6B
+            USB_STACK_BM
+            FSL_OSA_BM_TASK_ENABLE=0
+            FSL_OSA_BM_TIMER_CONFIG=0
+            SDK_OS_BAREMETAL
+            NCR2_OPEN_USB_VID=0
+            NCR2_OPEN_USB_PID=0
+    )
+    target_compile_options(
+        ncr2_hardware_link_probe
+        PRIVATE
+            ${NCR2_CPU_FLAGS}
+            -ffreestanding
+            -fno-builtin
+            -fdata-sections
+            -ffunction-sections
+            -fno-common
+            -Wall
+            -Wextra
+            -Werror
+            -Wconversion
+            -Wshadow
+            -Wundef
+    )
+    set_source_files_properties(
+        ${NCR2_BOARD_VENDOR_SOURCES}
+        ${NCR2_FLEXSPI_VENDOR_SOURCE}
+        ${NCR2_USB_VENDOR_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-w"
+    )
+    target_link_options(
+        ncr2_hardware_link_probe
+        PRIVATE
+            ${NCR2_CPU_FLAGS}
+            -nostdlib
+            -Wl,-n
+            -Wl,--gc-sections
+            -Wl,--build-id=none
+            -Wl,-e,ncr2_board_recovery_input_init
+            -Wl,--undefined=ncr2_board_usb_clock_init
+            -Wl,--undefined=ncr2_board_usb_irq_enable
+            -Wl,--undefined=ncr2_board_warm_reset
+            -Wl,--undefined=ncr2_board_make_recovery_request
+            -Wl,--undefined=ncr2_board_recovery_requested
+            -Wl,--undefined=ncr2_recovery_usb_start
+            -Wl,--undefined=ncr2_flexspi_nor_init
+            -Wl,--undefined=USB_OTG1_IRQHandler
+            -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/ncr2_hardware_link_probe.map
+            -T${CMAKE_CURRENT_SOURCE_DIR}/bootloader/ncr2_bootloader.ld
+    )
+    set_target_properties(
+        ncr2_hardware_link_probe
         PROPERTIES SUFFIX ".elf"
     )
 endif()
