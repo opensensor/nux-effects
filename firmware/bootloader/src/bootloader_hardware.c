@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "MIMXRT1051.h"
 #include "bootloader_runtime.h"
 #include "ncr2_board.h"
 #include "ncr2_flash_layout.h"
@@ -14,11 +15,18 @@
 #ifndef NCR2_HARDWARE_RECOVERY_WRITE_ENABLE
 #define NCR2_HARDWARE_RECOVERY_WRITE_ENABLE 0
 #endif
+#ifndef NCR2_EMBED_RAM_RECOVERY
+#define NCR2_EMBED_RAM_RECOVERY 0
+#endif
 
 _Static_assert(
     NCR2_HARDWARE_RECOVERY_WRITE_ENABLE == 0 ||
         NCR2_HARDWARE_RECOVERY_WRITE_ENABLE == 1,
     "hardware recovery write gate must be zero or one");
+_Static_assert(
+    NCR2_EMBED_RAM_RECOVERY == 0 ||
+        NCR2_EMBED_RAM_RECOVERY == 1,
+    "embedded RAM recovery gate must be zero or one");
 
 #define NCR2_DIAGNOSTIC_HARDWARE_NOR_FAILED \
     UINT32_C(0x4254E001)
@@ -40,6 +48,70 @@ typedef struct ncr2_hardware_boot_context {
 } ncr2_hardware_boot_context_t;
 
 static ncr2_hardware_boot_context_t g_hardware;
+
+__attribute__((noreturn))
+static void stop_with_diagnostic(uint32_t diagnostic);
+
+#if NCR2_EMBED_RAM_RECOVERY
+extern const uint8_t __ram_recovery_blob_start[];
+extern const uint8_t __ram_recovery_blob_end[];
+
+__attribute__((noreturn, noinline))
+static void launch_embedded_ram_recovery(void)
+{
+    uint8_t *destination =
+        (uint8_t *)(uintptr_t)NCR2_APPLICATION_LOAD_ADDRESS;
+    const uint8_t *source = __ram_recovery_blob_start;
+    const uint32_t length =
+        (uint32_t)(
+            __ram_recovery_blob_end - __ram_recovery_blob_start);
+    const uint32_t *vectors;
+    uint32_t initial_stack;
+    uint32_t reset_handler;
+    void (*entry)(void);
+
+    if (length < UINT32_C(8) ||
+        length > NCR2_APPLICATION_SLOT_SIZE) {
+        stop_with_diagnostic(
+            NCR2_DIAGNOSTIC_HARDWARE_STORAGE_FAILED);
+    }
+    for (uint32_t index = UINT32_C(0);
+         index < length;
+         ++index) {
+        destination[index] = source[index];
+    }
+    __DSB();
+    __ISB();
+
+    vectors =
+        (const uint32_t *)(uintptr_t)
+            NCR2_APPLICATION_LOAD_ADDRESS;
+    initial_stack = vectors[0];
+    reset_handler = vectors[1];
+    if (initial_stack < NCR2_DTCM_START ||
+        initial_stack > NCR2_DTCM_END ||
+        (initial_stack & UINT32_C(7)) != UINT32_C(0) ||
+        (reset_handler & UINT32_C(1)) == UINT32_C(0) ||
+        (reset_handler & ~UINT32_C(1)) <
+            NCR2_APPLICATION_LOAD_ADDRESS ||
+        (reset_handler & ~UINT32_C(1)) >=
+            NCR2_APPLICATION_LOAD_ADDRESS + length) {
+        stop_with_diagnostic(
+            NCR2_DIAGNOSTIC_HARDWARE_STORAGE_FAILED);
+    }
+
+    __disable_irq();
+    SCB->VTOR = NCR2_APPLICATION_LOAD_ADDRESS;
+    __DSB();
+    __ISB();
+    entry = (void (*)(void))(uintptr_t)reset_handler;
+    __asm volatile(
+        "msr msp, %0" : : "r"(initial_stack) : "memory");
+    entry();
+    stop_with_diagnostic(
+        NCR2_DIAGNOSTIC_HARDWARE_STORAGE_FAILED);
+}
+#endif
 
 __attribute__((noreturn))
 static void stop_with_diagnostic(uint32_t diagnostic)
@@ -127,6 +199,7 @@ static void make_readonly_recovery(
 }
 #endif
 
+#if !NCR2_EMBED_RAM_RECOVERY
 static uint8_t active_slot_for_recovery(
     const boot_controller_result_t *result)
 {
@@ -146,6 +219,7 @@ static uint32_t recovery_session_seed(
                 ncr2_board_watchdog_reset_status()
             << 16U);
 }
+#endif
 
 static void enter_hardware_recovery(
     void *opaque,
@@ -159,6 +233,11 @@ static void enter_hardware_recovery(
             NCR2_DIAGNOSTIC_HARDWARE_STORAGE_FAILED);
     }
 
+#if NCR2_EMBED_RAM_RECOVERY
+    (void)hardware;
+    (void)result;
+    launch_embedded_ram_recovery();
+#else
 #if NCR2_HARDWARE_RECOVERY_WRITE_ENABLE
     recovery_storage_make_backend(
         &hardware->storage,
@@ -184,12 +263,15 @@ static void enter_hardware_recovery(
         stop_with_diagnostic(
             NCR2_DIAGNOSTIC_HARDWARE_USB_START_FAILED);
     }
+    ncr2_board_recovery_indicator_init();
 
     g_boot_diagnostic =
         NCR2_DIAGNOSTIC_HARDWARE_RECOVERY_ACTIVE;
     for (;;) {
+        ncr2_recovery_usb_service();
         __asm volatile("wfi");
     }
+#endif
 }
 
 #if NCR2_HARDWARE_RECOVERY_WRITE_ENABLE

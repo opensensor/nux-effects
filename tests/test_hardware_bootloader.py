@@ -101,6 +101,10 @@ class HardwareBootloaderSafetyTests(unittest.TestCase):
             cmake,
         )
         self.assertIn(
+            "NCR2_ALLOW_BORROWED_NUX_DFU_ID",
+            cmake,
+        )
+        self.assertIn(
             "NCR2_EFFECTIVE_USB_VID 0",
             cmake,
         )

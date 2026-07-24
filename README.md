@@ -32,6 +32,14 @@ The executed factory SAI/eDMA format and buffer topology are documented in
 The recovered GPIO startup levels and remaining analog-control ambiguity are
 documented in
 [docs/hardware/FACTORY_BOARD_CONTROL.md](docs/hardware/FACTORY_BOARD_CONTROL.md).
+Last-resort recovery through the immutable i.MX RT1051 ROM downloader is
+documented in
+[docs/hardware/ROM_SDP_RECOVERY.md](docs/hardware/ROM_SDP_RECOVERY.md).
+The guarded SDRAM personality that can replace all 8 MiB through the open
+HID protocol is documented in
+[docs/hardware/RAM_FULL_FLASH_RECOVERY.md](docs/hardware/RAM_FULL_FLASH_RECOVERY.md).
+The exact Linux `sdphost`, `blhost`, and RT1052 RAM flashloader assets used on
+physical NCR-2 hardware are preserved with a guarded host wrapper.
 
 ## Current hardware facts
 
@@ -52,6 +60,10 @@ or unsafe to flash without verifying the exact target.
 Local tools and tests can use a separately preserved, verified dump named
 `dump1.bin`. Its expected SHA-256 is recorded in the documentation and
 validation code. Generated flash images remain ignored by Git.
+
+The Apache-2.0 NXP host utilities and RAM flashloader used for last-resort ROM
+recovery are a deliberate exception: their exact binaries, hashes, upstream
+commit, and license are preserved under `tools/vendor/nxp-mcubootutility/`.
 
 ## Safety
 
@@ -82,6 +94,14 @@ under host tests. The complete 64-byte USB HID stack, minimal RT1051 board
 wrapper, boot journal, watchdog handoff, and RAM-resident FlexSPI backend now
 link into an opt-in hardware bootloader. Its startup installs the open vector
 table explicitly, including USB OTG1, before C initialization.
+
+A separate 17 KiB SDRAM-resident recovery target now supports an explicitly
+armed whole-chip erase/write/hash transaction. The development bootloader can
+embed that checked binary and copies it to SDRAM before recovery USB starts,
+so it consumes no effect slot and remains alive after erasing itself. The
+legacy XIP recovery path never advertises the capability and retains its
+slot/metadata-only mutation policy. The embedded bytes and RAM residency are
+both post-link checked.
 
 The hardware target is separately gated for USB enumeration and NOR writes.
 It defaults to unassigned USB IDs and a read-only recovery backend. A

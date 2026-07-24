@@ -5,16 +5,16 @@
 
 .section .isr_vector, "a", %progbits
 .align 9
-.global g_boot_vectors
-.type g_boot_vectors, %object
-g_boot_vectors:
+.global g_ram_recovery_vectors
+.type g_ram_recovery_vectors, %object
+g_ram_recovery_vectors:
     .word __stack_top
     .word Reset_Handler
     /* Core vectors 2..14. */
     .rept 13
     .word Default_Handler
     .endr
-    /* Core vector 15: SysTick recovery heartbeat. */
+    /* Core vector 15: SysTick indicator heartbeat. */
     .word SysTick_Handler
     /* External IRQs 0..112. */
     .rept 113
@@ -26,7 +26,7 @@ g_boot_vectors:
     .rept 46
     .word Default_Handler
     .endr
-.size g_boot_vectors, . - g_boot_vectors
+.size g_ram_recovery_vectors, . - g_ram_recovery_vectors
 
 .section .text.Reset_Handler, "ax", %progbits
 .align 2
@@ -34,29 +34,26 @@ g_boot_vectors:
 .type Reset_Handler, %function
 .thumb_func
 Reset_Handler:
-    /*
-     * The ROM enters through the image vector table but does not form part
-     * of our interrupt-routing contract. Install the table explicitly
-     * before any board adapter can enable a peripheral interrupt.
-     */
+    cpsid i
+
+    /* Install the SDRAM vector table before enabling any peripheral. */
     ldr r0, =0xE000ED08
-    ldr r1, =g_boot_vectors
+    ldr r1, =g_ram_recovery_vectors
     str r1, [r0]
     dsb
     isb
 
-#if defined(NCR2_HARDWARE_STARTUP)
-    /*
-     * Match the stock launcher's early core setup using the pinned RT1051
-     * SystemInit implementation: FPU access, watchdog shutdown, SysTick
-     * shutdown, and I-cache enable. This call uses no initialized C data.
-     */
-    bl SystemInit
-#endif
+    /* Preserve the bootloader's clocks/SEMC setup; only enable the FPU. */
+    ldr r0, =0xE000ED88
+    ldr r1, [r0]
+    orr r1, r1, #(0xF << 20)
+    str r1, [r0]
+    dsb
+    isb
 
-    ldr r0, =__ramfunc_load
-    ldr r1, =__ramfunc_start
-    ldr r2, =__ramfunc_end
+    ldr r0, =__data_load
+    ldr r1, =__data_start
+    ldr r2, =__data_end
 0:
     cmp r1, r2
     bcs 1f
@@ -64,29 +61,20 @@ Reset_Handler:
     str r3, [r1], #4
     b 0b
 1:
-    ldr r0, =__data_load
-    ldr r1, =__data_start
-    ldr r2, =__data_end
-2:
-    cmp r1, r2
-    bcs 3f
-    ldr r3, [r0], #4
-    str r3, [r1], #4
-    b 2b
-3:
     ldr r1, =__bss_start
     ldr r2, =__bss_end
     movs r3, #0
-4:
+2:
     cmp r1, r2
-    bcs 5f
+    bcs 3f
     str r3, [r1], #4
-    b 4b
-5:
-    bl bootloader_main
-6:
+    b 2b
+3:
+    cpsie i
+    bl ram_recovery_main
+4:
     wfi
-    b 6b
+    b 4b
 .size Reset_Handler, . - Reset_Handler
 
 .section .text.Default_Handler, "ax", %progbits

@@ -163,11 +163,17 @@ int main(void)
             NCR2_APPLICATION_A_ADDRESS + 1u,
             NCR2_NOR_SECTOR_SIZE) !=
         NCR2_NOR_ALIGNMENT_ERROR) return 6;
+    context.flash[NCR2_BOOT_METADATA_OFFSET] = 0;
     if (ncr2_nor_erase(
             &nor,
             NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET,
             NCR2_NOR_SECTOR_SIZE) != NCR2_NOR_OK) return 7;
     if (context.erase_calls != 1 || context.sync_calls != 1) return 8;
+    if (ncr2_nor_erase(
+            &nor,
+            NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET,
+            NCR2_NOR_SECTOR_SIZE) != NCR2_NOR_OK) return 21;
+    if (context.erase_calls != 1 || context.sync_calls != 1) return 22;
 
     if (ncr2_nor_program(
             &nor, address, payload, sizeof(payload)) != NCR2_NOR_OK) {
@@ -223,6 +229,15 @@ int main(void)
                 NCR2_NOR_SECTOR_SIZE,
             2u * NCR2_NOR_SECTOR_SIZE) !=
         NCR2_NOR_OUT_OF_RANGE) return 20;
+
+    context.flash[0] = 0;
+    if (ncr2_nor_init_full_flash(&nor, &operations) !=
+        NCR2_NOR_OK) return 23;
+    if (ncr2_nor_erase(
+            &nor,
+            NCR2_FLASH_XIP_BASE,
+            NCR2_NOR_SECTOR_SIZE) != NCR2_NOR_OK) return 24;
+    if (context.flash[0] != 0xff) return 25;
     return 0;
 }
 """

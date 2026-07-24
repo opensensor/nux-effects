@@ -25,6 +25,10 @@ class UsbRecoverySafetyTests(unittest.TestCase):
             "NCR2_OPEN_USB_VID == UINT16_C(0x9527)",
             adapter,
         )
+        self.assertIn(
+            "NCR2_ALLOW_BORROWED_NUX_DFU_ID == 0",
+            adapter,
+        )
 
     def test_open_descriptor_uses_protocol_report_size_and_endpoints(self):
         header = (USB_DIR / "recovery_usb_descriptor.h").read_text()
@@ -44,6 +48,10 @@ class UsbRecoverySafetyTests(unittest.TestCase):
         descriptor = (USB_DIR / "recovery_usb_descriptor.c").read_text()
         self.assertIn("NCR2_OPEN_USB_VID", descriptor)
         self.assertIn("NCR2_OPEN_USB_PID", descriptor)
+        self.assertIn(
+            "NCR2_USB_DEVICE_BCD UINT16_C(0x0002)",
+            descriptor,
+        )
         self.assertNotIn("0x9527", descriptor.lower())
 
     def test_flexspi_adapter_is_opt_in_and_device_guarded(self):
@@ -65,7 +73,14 @@ class UsbRecoverySafetyTests(unittest.TestCase):
         self.assertIn("NCR2_W25Q64_MANUFACTURER UINT8_C(0xEF)", source)
         self.assertIn("NCR2_W25Q64_MEMORY_TYPE UINT8_C(0x40)", source)
         self.assertIn("NCR2_W25Q64_CAPACITY UINT8_C(0x17)", source)
-        self.assertIn("mutation_allowed(address, length)", source)
+        self.assertIn(
+            "mutation_allowed(context, address, length)",
+            source,
+        )
+        self.assertIn(
+            "ncr2_flexspi_nor_init_full_flash",
+            source,
+        )
 
         linker = (
             ROOT
@@ -73,13 +88,19 @@ class UsbRecoverySafetyTests(unittest.TestCase):
             / "bootloader"
             / "ncr2_bootloader.ld"
         ).read_text()
-        for symbol in (
+        self.assertIn("DEFINED(FLEXSPI_UpdateLUT) ?", linker)
+        for obsolete in (
             "FLEXSPI_ReadBlocking",
             "FLEXSPI_WriteBlocking",
             "FLEXSPI_TransferBlocking",
-            "FLEXSPI_UpdateLUT",
         ):
-            self.assertIn(f"DEFINED({symbol}) ?", linker)
+            self.assertNotIn(f"DEFINED({obsolete}) ?", linker)
+        for bounded_primitive in (
+            "NCR2_FLEXSPI_POLL_LIMIT",
+            "NCR2_FLEXSPI_RESET_POLL_LIMIT",
+            "NCR2_FLASH_BUSY_POLL_LIMIT",
+        ):
+            self.assertIn(bounded_primitive, source)
 
 
 if __name__ == "__main__":

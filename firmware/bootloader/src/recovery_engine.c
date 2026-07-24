@@ -4,6 +4,7 @@
 
 #include "crc32.h"
 #include "ncr2_flash_layout.h"
+#include "ncr2_nor.h"
 #include "pedal_image.h"
 #include "sha256.h"
 
@@ -47,13 +48,23 @@ static uint8_t packet_slot(const recovery_packet_t *packet)
 static int command_uses_session(uint8_t command)
 {
     return command != RECOVERY_COMMAND_GET_INFO &&
-           command != RECOVERY_COMMAND_BEGIN_IMAGE;
+           command != RECOVERY_COMMAND_BEGIN_IMAGE &&
+           command != RECOVERY_COMMAND_BEGIN_FULL_FLASH &&
+           command != RECOVERY_COMMAND_GET_LOG;
 }
 
-static int command_allows_zero_length(uint8_t command)
+static int command_uses_payload(uint8_t command)
 {
-    return command != RECOVERY_COMMAND_WRITE_CHUNK &&
-           command != RECOVERY_COMMAND_READ_CHUNK;
+    return command == RECOVERY_COMMAND_WRITE_CHUNK ||
+           command == RECOVERY_COMMAND_READ_CHUNK ||
+           command == RECOVERY_COMMAND_BEGIN_FULL_FLASH;
+}
+
+static int command_is_full_only(uint8_t command)
+{
+    return command == RECOVERY_COMMAND_BEGIN_FULL_FLASH ||
+           command == RECOVERY_COMMAND_ERASE_FULL_FLASH ||
+           command == RECOVERY_COMMAND_FINALIZE_FULL_FLASH;
 }
 
 static void make_response(const recovery_packet_t *request,
@@ -79,17 +90,28 @@ static uint16_t validate_common(const recovery_packet_t *request)
     if (status != RECOVERY_STATUS_OK) {
         return status;
     }
-    if ((request->flags & ~RECOVERY_FLAG_ALLOWED_MASK) != UINT16_C(0)) {
+    if ((request->flags & ~RECOVERY_FLAG_ALLOWED_MASK) != UINT16_C(0) ||
+        (command_is_full_only(request->command) != 0 &&
+         request->flags != RECOVERY_FLAG_FULL_FLASH) ||
+        (command_is_full_only(request->command) == 0 &&
+         request->command != RECOVERY_COMMAND_WRITE_CHUNK &&
+         request->command != RECOVERY_COMMAND_READ_CHUNK &&
+         request->command != RECOVERY_COMMAND_REBOOT &&
+         (request->flags & RECOVERY_FLAG_FULL_FLASH) != UINT16_C(0))) {
         return RECOVERY_STATUS_BAD_FLAGS;
     }
     if (request->status != RECOVERY_STATUS_OK) {
         return RECOVERY_STATUS_INVALID_STATE;
     }
-    if (command_allows_zero_length(request->command) != 0) {
-        if (request->length != UINT16_C(0)) {
+    if (request->command == RECOVERY_COMMAND_BEGIN_FULL_FLASH) {
+        if (request->length != SHA256_DIGEST_SIZE) {
             return RECOVERY_STATUS_BAD_LENGTH;
         }
-    } else if (request->length == UINT16_C(0)) {
+    } else if (command_uses_payload(request->command) != 0) {
+        if (request->length == UINT16_C(0)) {
+            return RECOVERY_STATUS_BAD_LENGTH;
+        }
+    } else if (request->length != UINT16_C(0)) {
         return RECOVERY_STATUS_BAD_LENGTH;
     }
     return RECOVERY_STATUS_OK;
@@ -122,7 +144,20 @@ static uint16_t resolve_target_range(const recovery_engine_t *engine,
                                      const recovery_packet_t *request,
                                      uint32_t *address)
 {
-    if (packet_slot(request) != engine->target_slot) {
+    if (request->offset >= engine->expected_image_size ||
+        request->length >
+            engine->expected_image_size - request->offset) {
+        return RECOVERY_STATUS_RANGE_DENIED;
+    }
+    if (engine->full_flash_session != UINT8_C(0)) {
+        if (request->flags != RECOVERY_FLAG_FULL_FLASH) {
+            return RECOVERY_STATUS_BAD_FLAGS;
+        }
+        *address = NCR2_FLASH_XIP_BASE + request->offset;
+        return RECOVERY_STATUS_OK;
+    }
+    if ((request->flags & RECOVERY_FLAG_FULL_FLASH) != UINT16_C(0) ||
+        packet_slot(request) != engine->target_slot) {
         return RECOVERY_STATUS_BAD_SLOT;
     }
     return recovery_resolve_range(
@@ -263,11 +298,35 @@ static uint16_t handle_get_info(recovery_engine_t *engine,
         RECOVERY_CAPABILITY_AB_SLOTS |
         RECOVERY_CAPABILITY_SHA256 |
         RECOVERY_CAPABILITY_READBACK |
-        RECOVERY_CAPABILITY_RETRY_CACHE;
+        RECOVERY_CAPABILITY_RETRY_CACHE |
+        RECOVERY_CAPABILITY_BOUNDED_ERASE;
+    if (engine->full_flash_enabled != UINT8_C(0)) {
+        info.capabilities |= RECOVERY_CAPABILITY_FULL_FLASH_RAM;
+    }
     info.max_chunk_size = RECOVERY_PAYLOAD_SIZE;
 
     response->length = (uint16_t)sizeof(info);
     bytes_copy(response->payload, &info, sizeof(info));
+    return RECOVERY_STATUS_OK;
+}
+
+static uint16_t handle_get_log(recovery_engine_t *engine,
+                               recovery_packet_t *response)
+{
+    int length;
+
+    if (engine->backend.get_log == NULL) {
+        return RECOVERY_STATUS_OK;
+    }
+    length = engine->backend.get_log(
+        engine->backend.context,
+        response->payload,
+        RECOVERY_PAYLOAD_SIZE);
+    if (length < 0 ||
+        (uint32_t)length > RECOVERY_PAYLOAD_SIZE) {
+        return RECOVERY_STATUS_BACKEND_ERROR;
+    }
+    response->length = (uint16_t)length;
     return RECOVERY_STATUS_OK;
 }
 
@@ -276,24 +335,65 @@ static uint16_t handle_begin(recovery_engine_t *engine,
                              recovery_packet_t *response)
 {
     const uint8_t target = packet_slot(request);
+    const uint32_t minimum_image_size =
+        NCR2_APPLICATION_MANIFEST_SIZE + UINT32_C(8);
 
     if (target == engine->boot_state.confirmed_slot ||
         target == engine->active_slot) {
         return RECOVERY_STATUS_ACTIVE_SLOT;
     }
+    if (request->offset < minimum_image_size ||
+        request->offset > NCR2_APPLICATION_SLOT_SIZE) {
+        return RECOVERY_STATUS_RANGE_DENIED;
+    }
     engine->session = next_session(engine);
     engine->expected_sequence = UINT32_C(1);
     engine->next_write_offset = UINT32_C(0);
+    engine->expected_image_size = request->offset;
     engine->target_slot = target;
+    engine->full_flash_session = UINT8_C(0);
     engine->phase = RECOVERY_PHASE_BEGUN;
     engine->has_previous = UINT8_C(0);
     response->session = engine->session;
     return RECOVERY_STATUS_OK;
 }
 
-static uint16_t handle_erase(recovery_engine_t *engine)
+static uint16_t handle_begin_full_flash(
+    recovery_engine_t *engine,
+    const recovery_packet_t *request,
+    recovery_packet_t *response)
+{
+    if (engine->full_flash_enabled == UINT8_C(0)) {
+        return RECOVERY_STATUS_FULL_FLASH_DISABLED;
+    }
+    if (request->session != RECOVERY_FULL_FLASH_UNLOCK ||
+        request->sequence != UINT32_C(0)) {
+        return RECOVERY_STATUS_INVALID_STATE;
+    }
+    if (request->offset != NCR2_FLASH_SIZE) {
+        return RECOVERY_STATUS_RANGE_DENIED;
+    }
+
+    engine->session = next_session(engine);
+    engine->expected_sequence = UINT32_C(1);
+    engine->next_write_offset = UINT32_C(0);
+    engine->expected_image_size = NCR2_FLASH_SIZE;
+    engine->target_slot = BOOT_SLOT_NONE;
+    engine->phase = RECOVERY_PHASE_BEGUN;
+    engine->has_previous = UINT8_C(0);
+    engine->full_flash_session = UINT8_C(1);
+    bytes_copy(
+        engine->expected_image_sha256,
+        request->payload,
+        SHA256_DIGEST_SIZE);
+    response->session = engine->session;
+    return RECOVERY_STATUS_OK;
+}
+
+static uint16_t handle_erase_slot(recovery_engine_t *engine)
 {
     uint32_t slot_address;
+    uint32_t erase_length;
 
     if (engine->phase != RECOVERY_PHASE_BEGUN &&
         engine->phase != RECOVERY_PHASE_ERASED) {
@@ -302,14 +402,39 @@ static uint16_t handle_erase(recovery_engine_t *engine)
     if (recovery_resolve_range(
             engine->target_slot,
             0U,
-            NCR2_APPLICATION_SLOT_SIZE,
+            engine->expected_image_size,
             &slot_address) != RECOVERY_STATUS_OK) {
         return RECOVERY_STATUS_BAD_SLOT;
     }
+    erase_length =
+        (engine->expected_image_size +
+         NCR2_NOR_SECTOR_SIZE - UINT32_C(1)) &
+        ~(NCR2_NOR_SECTOR_SIZE - UINT32_C(1));
     if (engine->backend.erase(
             engine->backend.context,
             slot_address,
-            NCR2_APPLICATION_SLOT_SIZE) != 0) {
+            erase_length) != 0) {
+        return RECOVERY_STATUS_BACKEND_ERROR;
+    }
+    engine->next_write_offset = UINT32_C(0);
+    engine->phase = RECOVERY_PHASE_ERASED;
+    return RECOVERY_STATUS_OK;
+}
+
+static uint16_t handle_erase_full_flash(recovery_engine_t *engine)
+{
+    if (engine->full_flash_enabled == UINT8_C(0) ||
+        engine->full_flash_session == UINT8_C(0)) {
+        return RECOVERY_STATUS_FULL_FLASH_DISABLED;
+    }
+    if (engine->phase != RECOVERY_PHASE_BEGUN &&
+        engine->phase != RECOVERY_PHASE_ERASED) {
+        return RECOVERY_STATUS_INVALID_STATE;
+    }
+    if (engine->backend.erase(
+            engine->backend.context,
+            NCR2_FLASH_XIP_BASE,
+            NCR2_FLASH_SIZE) != 0) {
         return RECOVERY_STATUS_BACKEND_ERROR;
     }
     engine->next_write_offset = UINT32_C(0);
@@ -375,7 +500,8 @@ static uint16_t handle_finalize(recovery_engine_t *engine)
 {
     uint16_t status;
 
-    if (engine->phase != RECOVERY_PHASE_WRITING) {
+    if (engine->phase != RECOVERY_PHASE_WRITING ||
+        engine->next_write_offset != engine->expected_image_size) {
         return RECOVERY_STATUS_INVALID_STATE;
     }
     status = validate_stored_image(engine);
@@ -383,6 +509,52 @@ static uint16_t handle_finalize(recovery_engine_t *engine)
         engine->phase = RECOVERY_PHASE_FINALIZED;
     }
     return status;
+}
+
+static uint16_t handle_finalize_full_flash(
+    recovery_engine_t *engine)
+{
+    sha256_context_t sha;
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    uint8_t buffer[RECOVERY_PAYLOAD_SIZE];
+    uint32_t address = NCR2_FLASH_XIP_BASE;
+    uint32_t remaining = NCR2_FLASH_SIZE;
+
+    if (engine->full_flash_enabled == UINT8_C(0) ||
+        engine->full_flash_session == UINT8_C(0)) {
+        return RECOVERY_STATUS_FULL_FLASH_DISABLED;
+    }
+    if (engine->phase != RECOVERY_PHASE_WRITING ||
+        engine->next_write_offset != NCR2_FLASH_SIZE) {
+        return RECOVERY_STATUS_INVALID_STATE;
+    }
+
+    sha256_init(&sha);
+    while (remaining != UINT32_C(0)) {
+        uint32_t chunk = remaining;
+        if (chunk > RECOVERY_PAYLOAD_SIZE) {
+            chunk = RECOVERY_PAYLOAD_SIZE;
+        }
+        if (engine->backend.read(
+                engine->backend.context,
+                address,
+                buffer,
+                chunk) != 0) {
+            return RECOVERY_STATUS_BACKEND_ERROR;
+        }
+        sha256_update(&sha, buffer, chunk);
+        address += chunk;
+        remaining -= chunk;
+    }
+    sha256_final(&sha, digest);
+    if (!bytes_equal(
+            digest,
+            engine->expected_image_sha256,
+            SHA256_DIGEST_SIZE)) {
+        return RECOVERY_STATUS_IMAGE_INVALID;
+    }
+    engine->phase = RECOVERY_PHASE_FINALIZED;
+    return RECOVERY_STATUS_OK;
 }
 
 static uint16_t handle_set_pending(recovery_engine_t *engine)
@@ -417,7 +589,7 @@ static uint16_t dispatch_command(recovery_engine_t *engine,
     case RECOVERY_COMMAND_BEGIN_IMAGE:
         return handle_begin(engine, request, response);
     case RECOVERY_COMMAND_ERASE_SLOT:
-        return handle_erase(engine);
+        return handle_erase_slot(engine);
     case RECOVERY_COMMAND_WRITE_CHUNK:
         return handle_write(engine, request);
     case RECOVERY_COMMAND_READ_CHUNK:
@@ -427,7 +599,10 @@ static uint16_t dispatch_command(recovery_engine_t *engine,
     case RECOVERY_COMMAND_SET_PENDING:
         return handle_set_pending(engine);
     case RECOVERY_COMMAND_REBOOT:
-        if (engine->phase != RECOVERY_PHASE_PENDING) {
+        if ((engine->full_flash_session == UINT8_C(0) &&
+             engine->phase != RECOVERY_PHASE_PENDING) ||
+            (engine->full_flash_session != UINT8_C(0) &&
+             engine->phase != RECOVERY_PHASE_FINALIZED)) {
             return RECOVERY_STATUS_INVALID_STATE;
         }
         if (engine->backend.request_reboot != NULL) {
@@ -435,7 +610,13 @@ static uint16_t dispatch_command(recovery_engine_t *engine,
         }
         return RECOVERY_STATUS_OK;
     case RECOVERY_COMMAND_GET_LOG:
-        return RECOVERY_STATUS_OK;
+        return handle_get_log(engine, response);
+    case RECOVERY_COMMAND_BEGIN_FULL_FLASH:
+        return handle_begin_full_flash(engine, request, response);
+    case RECOVERY_COMMAND_ERASE_FULL_FLASH:
+        return handle_erase_full_flash(engine);
+    case RECOVERY_COMMAND_FINALIZE_FULL_FLASH:
+        return handle_finalize_full_flash(engine);
     default:
         return RECOVERY_STATUS_BAD_COMMAND;
     }
@@ -463,6 +644,14 @@ void recovery_engine_init(recovery_engine_t *engine,
         session_seed == UINT32_C(0)
             ? UINT32_C(0x4E584658)
             : session_seed;
+}
+
+void recovery_engine_enable_full_flash(recovery_engine_t *engine)
+{
+    if (engine != NULL) {
+        engine->full_flash_enabled = UINT8_C(1);
+        engine->has_previous = UINT8_C(0);
+    }
 }
 
 void recovery_engine_process(recovery_engine_t *engine,
@@ -502,13 +691,27 @@ void recovery_engine_process(recovery_engine_t *engine,
             status = RECOVERY_STATUS_BAD_SESSION;
         } else if (request->sequence != engine->expected_sequence) {
             status = RECOVERY_STATUS_BAD_SEQUENCE;
-        } else if (packet_slot(request) != engine->target_slot) {
+        } else if (engine->full_flash_session != UINT8_C(0) &&
+                   request->flags != RECOVERY_FLAG_FULL_FLASH) {
+            status = RECOVERY_STATUS_BAD_FLAGS;
+        } else if (engine->full_flash_session == UINT8_C(0) &&
+                   ((request->flags & RECOVERY_FLAG_FULL_FLASH) !=
+                        UINT16_C(0) ||
+                    packet_slot(request) != engine->target_slot)) {
             status = RECOVERY_STATUS_BAD_SLOT;
         } else {
             status = RECOVERY_STATUS_OK;
         }
         if (status != RECOVERY_STATUS_OK) {
             response->status = status;
+            recovery_packet_finalize(response);
+            return;
+        }
+    } else if (request->command ==
+                   RECOVERY_COMMAND_BEGIN_FULL_FLASH) {
+        if (request->session != RECOVERY_FULL_FLASH_UNLOCK ||
+            request->sequence != UINT32_C(0)) {
+            response->status = RECOVERY_STATUS_INVALID_STATE;
             recovery_packet_finalize(response);
             return;
         }

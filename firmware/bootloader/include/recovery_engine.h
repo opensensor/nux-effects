@@ -10,6 +10,8 @@
 #define RECOVERY_CAPABILITY_SHA256 UINT32_C(0x00000002)
 #define RECOVERY_CAPABILITY_READBACK UINT32_C(0x00000004)
 #define RECOVERY_CAPABILITY_RETRY_CACHE UINT32_C(0x00000008)
+#define RECOVERY_CAPABILITY_BOUNDED_ERASE UINT32_C(0x00000010)
+#define RECOVERY_CAPABILITY_FULL_FLASH_RAM UINT32_C(0x00000020)
 
 enum recovery_update_phase {
     RECOVERY_PHASE_IDLE = 0,
@@ -31,6 +33,9 @@ typedef struct recovery_backend {
                    uint32_t address,
                    const void *source,
                    uint32_t length);
+    int (*get_log)(void *context,
+                   void *destination,
+                   uint32_t capacity);
     int (*store_boot_state)(void *context, const boot_state_t *state);
     void (*request_reboot)(void *context);
 } recovery_backend_t;
@@ -57,11 +62,15 @@ typedef struct recovery_engine {
     uint32_t session;
     uint32_t expected_sequence;
     uint32_t next_write_offset;
+    uint32_t expected_image_size;
     uint32_t session_seed;
+    uint8_t expected_image_sha256[32];
     uint8_t active_slot;
     uint8_t target_slot;
     uint8_t phase;
     uint8_t has_previous;
+    uint8_t full_flash_enabled;
+    uint8_t full_flash_session;
 } recovery_engine_t;
 
 _Static_assert(sizeof(recovery_info_t) == RECOVERY_PAYLOAD_SIZE,
@@ -72,6 +81,7 @@ void recovery_engine_init(recovery_engine_t *engine,
                           const boot_state_t *boot_state,
                           uint8_t active_slot,
                           uint32_t session_seed);
+void recovery_engine_enable_full_flash(recovery_engine_t *engine);
 void recovery_engine_process(recovery_engine_t *engine,
                              const recovery_packet_t *request,
                              recovery_packet_t *response);

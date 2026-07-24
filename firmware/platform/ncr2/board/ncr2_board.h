@@ -17,10 +17,7 @@ enum ncr2_board_status {
     NCR2_BOARD_USB_PHY_FAILED = 2,
 };
 
-/*
- * Configure only the two recovered boot-selector inputs. This function
- * does not configure LEDs, relays, mute, audio, or any runtime control.
- */
+/* Configure the two recovered boot-selector inputs. */
 void ncr2_board_recovery_input_init(void);
 int ncr2_board_recovery_requested(void *context);
 void ncr2_board_make_recovery_request(
@@ -32,6 +29,13 @@ void ncr2_board_make_recovery_request(
  */
 uint16_t ncr2_board_usb_clock_init(void);
 void ncr2_board_usb_irq_enable(void);
+
+/*
+ * Blink the factory runtime indicator bank while recovery is active.
+ * The first hardware diagnostic identifies the visible status LED within
+ * this five-pin bank so later revisions can narrow the mask.
+ */
+void ncr2_board_recovery_indicator_init(void);
 
 /* Retains SRC GPRs and requests a Cortex-M system reset. */
 __attribute__((noreturn))

@@ -15,10 +15,12 @@ ITCM_END = 0x00020000
 FLASH_START = 0x60002000
 FLASH_END = 0x60020000
 REQUIRED_SYMBOLS = {
-    "FLEXSPI_ReadBlocking",
-    "FLEXSPI_WriteBlocking",
-    "FLEXSPI_TransferBlocking",
     "FLEXSPI_UpdateLUT",
+    "ram_erase_sector",
+    "ram_program_page",
+    "ram_software_reset",
+    "ram_transfer",
+    "ram_wait_until_flash_idle",
 }
 
 

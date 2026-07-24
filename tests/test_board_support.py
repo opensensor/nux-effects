@@ -130,13 +130,28 @@ class BoardSupportSafetyTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn(".word USB_OTG1_IRQHandler", startup)
-        self.assertIn(".rept 127", startup)
+        self.assertIn(".word SysTick_Handler", startup)
+        self.assertIn(".rept 13", startup)
+        self.assertIn(".rept 113", startup)
         self.assertIn(".rept 46", startup)
         self.assertIn(".weak USB_OTG1_IRQHandler", startup)
         self.assertIn(
             ".thumb_set USB_OTG1_IRQHandler, Default_Handler",
             startup,
         )
+        self.assertIn(".weak SysTick_Handler", startup)
+
+        board = (
+            ROOT
+            / "firmware"
+            / "platform"
+            / "ncr2"
+            / "board"
+            / "ncr2_board.c"
+        ).read_text()
+        self.assertIn("NCR2_RECOVERY_INDICATOR_MASK", board)
+        self.assertIn("GPIO2->DR_TOGGLE", board)
+        self.assertIn("void SysTick_Handler(void)", board)
 
 
 if __name__ == "__main__":

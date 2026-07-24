@@ -11,10 +11,18 @@
 .fpu fpv5-d16
 .thumb
 
+#ifndef NCR2_FACTORY_COMPAT_PREPARE
+#define NCR2_FACTORY_COMPAT_PREPARE 0
+#endif
+
 .equ FACTORY_ENGINE_XIP,       0x600c0000
 .equ FACTORY_ENGINE_COPY_SIZE, 0x0001e000
 .equ FACTORY_ENGINE_STACK,     0x20018000
 .equ FACTORY_ENGINE_RESET,     0x0000e4b5
+.equ BOOT_TRIAL_MAILBOX,       0x400f8028
+.equ SCB_AIRCR,                0xe000ed0c
+.equ SCB_ICIALLU,              0xe000ef50
+.equ AIRCR_SYSRESETREQ,        0x05fa0004
 
 .global ncr2_factory_engine_source
 .equ ncr2_factory_engine_source, FACTORY_ENGINE_XIP
@@ -59,6 +67,43 @@ Reset_Handler:
     cmp     r2, r3
     bne     bridge_fault
 
+    /*
+     * A bridge installed through open recovery initially runs as an A/B
+     * trial. Convert the bootloader's retained handoff token into a
+     * confirmation and reset once so the bootloader can commit slot B.
+     * A normally confirmed bridge has no handoff token and continues.
+     */
+    ldr     r0, =BOOT_TRIAL_MAILBOX
+    bl      boot_trial_arm_confirmation
+    cmp     r0, #0
+    bne     bridge_copy
+
+    dsb     sy
+    ldr     r0, =SCB_AIRCR
+    ldr     r1, =AIRCR_SYSRESETREQ
+    str     r1, [r0]
+    dsb     sy
+bridge_reset_wait:
+    wfi
+    b       bridge_reset_wait
+
+bridge_copy:
+#if NCR2_FACTORY_COMPAT_PREPARE
+    /*
+     * The factory launcher configured its MPU, board pin mux, core clock,
+     * cycle counter, and boot-switch inputs before copying an engine.  The
+     * open bootloader intentionally does not own those factory assumptions,
+     * so the SDK-backed compatibility target recreates them here.
+     */
+    bl      ncr2_factory_compat_prepare
+#endif
+
+    /*
+     * r0-r3 are caller-saved. Both boot_trial_arm_confirmation above and
+     * the optional C compatibility preparation may overwrite r1, so reload
+     * the audited XIP source immediately before the copy loop.
+     */
+    ldr     r1, =FACTORY_ENGINE_XIP
     movs    r0, #0
     ldr     r2, =FACTORY_ENGINE_COPY_SIZE
     lsrs    r2, r2, #2
@@ -68,6 +113,18 @@ Reset_Handler:
     subs    r2, r2, #1
     bne     1b
 
+    dsb     sy
+    isb     sy
+
+    /*
+     * The open bootloader's NOR primitives previously executed from ITCM
+     * address zero. Invalidate the complete instruction cache after
+     * replacing ITCM so no stale bootloader cache line can be executed as
+     * factory-engine code.
+     */
+    ldr     r0, =SCB_ICIALLU
+    movs    r1, #0
+    str     r1, [r0]
     dsb     sy
     isb     sy
 

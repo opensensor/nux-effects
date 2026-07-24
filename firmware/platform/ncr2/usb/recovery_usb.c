@@ -10,6 +10,15 @@
 #include "usb_device_config.h"
 #include "usb_device_hid.h"
 
+#ifndef NCR2_ALLOW_BORROWED_NUX_DFU_ID
+#define NCR2_ALLOW_BORROWED_NUX_DFU_ID 0
+#endif
+
+_Static_assert(
+    NCR2_ALLOW_BORROWED_NUX_DFU_ID == 0 ||
+        NCR2_ALLOW_BORROWED_NUX_DFU_ID == 1,
+    "borrowed NUX USB identity gate must be zero or one");
+
 #define NCR2_USB_CONTROLLER kUSB_ControllerEhci0
 
 _Static_assert(
@@ -22,6 +31,7 @@ typedef struct ncr2_recovery_usb_context {
     class_handle_t hid;
     uint8_t configuration;
     uint8_t attached;
+    volatile uint8_t request_pending;
 } ncr2_recovery_usb_context_t;
 
 USB_DMA_NONINIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE)
@@ -57,15 +67,15 @@ static usb_status_t hid_callback(
             message->length != sizeof(g_out_packet)) {
             return arm_receive();
         }
-        recovery_engine_process(
-            g_usb.engine,
-            &g_out_packet,
-            &g_in_packet);
-        return USB_DeviceHidSend(
-            g_usb.hid,
-            NCR2_USB_ENDPOINT_IN,
-            (uint8_t *)&g_in_packet,
-            sizeof(g_in_packet));
+        /*
+         * Flash mutation must not run in the USB IRQ callback. In
+         * particular, a sector erase temporarily masks interrupts while
+         * FlexSPI XIP is unavailable. Defer the complete request to the
+         * foreground service loop and leave this endpoint unarmed until
+         * its response has completed.
+         */
+        g_usb.request_pending = UINT8_C(1);
+        return kStatus_USB_Success;
     case kUSB_DeviceHidEventSendResponse:
         return arm_receive();
     case kUSB_DeviceHidEventGetIdle:
@@ -185,7 +195,8 @@ uint16_t ncr2_recovery_usb_start(recovery_engine_t *engine)
 {
     if (NCR2_OPEN_USB_VID == 0U ||
         NCR2_OPEN_USB_PID == 0U ||
-        NCR2_OPEN_USB_VID == UINT16_C(0x9527)) {
+        (NCR2_OPEN_USB_VID == UINT16_C(0x9527) &&
+         NCR2_ALLOW_BORROWED_NUX_DFU_ID == 0)) {
         return NCR2_RECOVERY_USB_UNASSIGNED_ID;
     }
     if (engine == NULL) {
@@ -197,6 +208,7 @@ uint16_t ncr2_recovery_usb_start(recovery_engine_t *engine)
     g_usb.hid = NULL;
     g_usb.configuration = 0U;
     g_usb.attached = 0U;
+    g_usb.request_pending = UINT8_C(0);
     if (USB_DeviceClassInit(
             NCR2_USB_CONTROLLER,
             &g_config_list,
@@ -208,6 +220,31 @@ uint16_t ncr2_recovery_usb_start(recovery_engine_t *engine)
         return NCR2_RECOVERY_USB_INIT_FAILED;
     }
     return NCR2_RECOVERY_USB_OK;
+}
+
+void ncr2_recovery_usb_service(void)
+{
+    usb_status_t status;
+
+    if (g_usb.request_pending == UINT8_C(0) ||
+        g_usb.attached == UINT8_C(0) ||
+        g_usb.engine == NULL ||
+        g_usb.hid == NULL) {
+        return;
+    }
+    g_usb.request_pending = UINT8_C(0);
+    recovery_engine_process(
+        g_usb.engine,
+        &g_out_packet,
+        &g_in_packet);
+    status = USB_DeviceHidSend(
+        g_usb.hid,
+        NCR2_USB_ENDPOINT_IN,
+        (uint8_t *)&g_in_packet,
+        sizeof(g_in_packet));
+    if (status != kStatus_USB_Success) {
+        (void)arm_receive();
+    }
 }
 
 void ncr2_recovery_usb_isr(void)

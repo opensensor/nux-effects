@@ -25,10 +25,6 @@ SECTIONS
         . = ALIGN(8);
         __ramfunc_start = .;
         *(.ramfunc*)
-        *fsl_flexspi.c.obj(.text.FLEXSPI_CheckAndClearError)
-        *fsl_flexspi.c.obj(.text.FLEXSPI_ReadBlocking)
-        *fsl_flexspi.c.obj(.text.FLEXSPI_WriteBlocking)
-        *fsl_flexspi.c.obj(.text.FLEXSPI_TransferBlocking)
         *fsl_flexspi.c.obj(.text.FLEXSPI_UpdateLUT)
         . = ALIGN(8);
         __ramfunc_end = .;
@@ -47,6 +43,15 @@ SECTIONS
         *(.igot.plt)
         *(.rel.iplt)
         . = ALIGN(4);
+    } > FLASH
+
+    .ram_recovery_blob :
+    {
+        . = ALIGN(8);
+        __ram_recovery_blob_start = .;
+        KEEP(*(.ram_recovery_blob))
+        . = ALIGN(8);
+        __ram_recovery_blob_end = .;
     } > FLASH
 
     .data :
@@ -94,18 +99,6 @@ SECTIONS
            "bootloader exceeds protected flash region")
     ASSERT(__ramfunc_end <= ORIGIN(ITCM) + LENGTH(ITCM),
            "RAM-resident flash call graph exceeds ITCM")
-    ASSERT(DEFINED(FLEXSPI_ReadBlocking) ?
-           (FLEXSPI_ReadBlocking >= ORIGIN(ITCM) &&
-            FLEXSPI_ReadBlocking < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,
-           "FLEXSPI_ReadBlocking must execute from ITCM")
-    ASSERT(DEFINED(FLEXSPI_WriteBlocking) ?
-           (FLEXSPI_WriteBlocking >= ORIGIN(ITCM) &&
-            FLEXSPI_WriteBlocking < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,
-           "FLEXSPI_WriteBlocking must execute from ITCM")
-    ASSERT(DEFINED(FLEXSPI_TransferBlocking) ?
-           (FLEXSPI_TransferBlocking >= ORIGIN(ITCM) &&
-            FLEXSPI_TransferBlocking < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,
-           "FLEXSPI_TransferBlocking must execute from ITCM")
     ASSERT(DEFINED(FLEXSPI_UpdateLUT) ?
            (FLEXSPI_UpdateLUT >= ORIGIN(ITCM) &&
             FLEXSPI_UpdateLUT < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,

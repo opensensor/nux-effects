@@ -14,5 +14,6 @@ enum ncr2_flexspi_nor_status {
 };
 
 uint16_t ncr2_flexspi_nor_init(ncr2_nor_t *nor);
+uint16_t ncr2_flexspi_nor_init_full_flash(ncr2_nor_t *nor);
 
 #endif

@@ -24,8 +24,19 @@
 #define NCR2_W25Q_STATUS_BUSY UINT8_C(0x01)
 #define NCR2_W25Q_STATUS_WRITE_ENABLE UINT8_C(0x02)
 
+#define NCR2_FLEXSPI_POLL_LIMIT UINT32_C(2000000)
+#define NCR2_FLEXSPI_RESET_POLL_LIMIT UINT32_C(200000)
+#define NCR2_FLASH_BUSY_POLL_LIMIT UINT32_C(200000)
+#define NCR2_FLASH_STATUS_ERROR_LIMIT UINT32_C(3)
+#define NCR2_FLEXSPI_ERROR_MASK \
+    (FLEXSPI_INTR_AHBCMDERR_MASK | \
+     FLEXSPI_INTR_IPCMDERR_MASK | \
+     FLEXSPI_INTR_AHBCMDGE_MASK | \
+     FLEXSPI_INTR_IPCMDGE_MASK)
+
 typedef struct ncr2_flexspi_context {
     uint8_t initialized;
+    uint8_t full_flash_mutation;
 } ncr2_flexspi_context_t;
 
 static ncr2_flexspi_context_t g_context;
@@ -40,7 +51,9 @@ static int range_inside(uint32_t offset,
            length <= region_size - (offset - region_offset);
 }
 
-static int mutation_allowed(uint32_t address, uint32_t length)
+static int mutation_allowed(const ncr2_flexspi_context_t *context,
+                            uint32_t address,
+                            uint32_t length)
 {
     uint32_t offset;
 
@@ -52,6 +65,9 @@ static int mutation_allowed(uint32_t address, uint32_t length)
     if (offset >= NCR2_FLASH_SIZE ||
         length > NCR2_FLASH_SIZE - offset) {
         return 0;
+    }
+    if (context->full_flash_mutation != UINT8_C(0)) {
+        return 1;
     }
     return range_inside(
                offset,
@@ -77,16 +93,132 @@ static NCR2_RAMFUNC status_t ram_transfer(
     uint32_t *data,
     uint32_t data_size)
 {
-    flexspi_transfer_t transfer;
+    uint32_t config_value = UINT32_C(0);
+    uint32_t polls;
 
-    transfer.deviceAddress = flash_offset;
-    transfer.port = kFLEXSPI_PortA1;
-    transfer.cmdType = command_type;
-    transfer.seqIndex = sequence;
-    transfer.SeqNumber = UINT8_C(1);
-    transfer.data = data;
-    transfer.dataSize = data_size;
-    return FLEXSPI_TransferBlocking(FLEXSPI, &transfer);
+    FLEXSPI->FLSHCR2[kFLEXSPI_PortA1] |=
+        FLEXSPI_FLSHCR2_CLRINSTRPTR_MASK;
+    FLEXSPI->INTR =
+        NCR2_FLEXSPI_ERROR_MASK |
+        FLEXSPI_INTR_IPCMDDONE_MASK;
+    FLEXSPI->IPCR0 = flash_offset;
+    FLEXSPI->IPTXFCR |= FLEXSPI_IPTXFCR_CLRIPTXF_MASK;
+    FLEXSPI->IPRXFCR |= FLEXSPI_IPRXFCR_CLRIPRXF_MASK;
+    if (command_type == kFLEXSPI_Read ||
+        command_type == kFLEXSPI_Write ||
+        command_type == kFLEXSPI_Config) {
+        config_value = FLEXSPI_IPCR1_IDATSZ(data_size);
+    }
+    config_value |=
+        FLEXSPI_IPCR1_ISEQID(sequence) |
+        FLEXSPI_IPCR1_ISEQNUM(UINT32_C(0));
+    FLEXSPI->IPCR1 = config_value;
+    FLEXSPI->IPCMD |= FLEXSPI_IPCMD_TRG_MASK;
+
+    if (command_type == kFLEXSPI_Write ||
+        command_type == kFLEXSPI_Config) {
+        const uint8_t *input = (const uint8_t *)data;
+        uint32_t remaining = data_size;
+        const uint32_t watermark =
+            ((FLEXSPI->IPTXFCR & FLEXSPI_IPTXFCR_TXWMRK_MASK) >>
+             FLEXSPI_IPTXFCR_TXWMRK_SHIFT) +
+            UINT32_C(1);
+        const uint32_t fifo_bytes = UINT32_C(8) * watermark;
+
+        while (remaining != UINT32_C(0)) {
+            uint32_t chunk;
+            uint32_t words;
+
+            for (polls = UINT32_C(0);
+                 polls < NCR2_FLEXSPI_POLL_LIMIT;
+                 ++polls) {
+                const uint32_t interrupt = FLEXSPI->INTR;
+                if ((interrupt & NCR2_FLEXSPI_ERROR_MASK) !=
+                    UINT32_C(0)) {
+                    return kStatus_Fail;
+                }
+                if ((interrupt &
+                     FLEXSPI_INTR_IPTXWE_MASK) != UINT32_C(0)) {
+                    break;
+                }
+            }
+            if (polls == NCR2_FLEXSPI_POLL_LIMIT) {
+                return kStatus_Timeout;
+            }
+            chunk = remaining < fifo_bytes ? remaining : fifo_bytes;
+            words = (chunk + UINT32_C(3)) / UINT32_C(4);
+            for (uint32_t word = UINT32_C(0);
+                 word < words;
+                 ++word) {
+                uint32_t value = UINT32_C(0);
+                for (uint32_t byte = UINT32_C(0);
+                     byte < UINT32_C(4);
+                     ++byte) {
+                    const uint32_t index =
+                        word * UINT32_C(4) + byte;
+                    if (index < chunk) {
+                        value |=
+                            (uint32_t)input[index] << (byte * UINT32_C(8));
+                    }
+                }
+                FLEXSPI->TFDR[word] = value;
+            }
+            input += chunk;
+            remaining -= chunk;
+            FLEXSPI->INTR = FLEXSPI_INTR_IPTXWE_MASK;
+        }
+    } else if (command_type == kFLEXSPI_Read) {
+        uint8_t *output = (uint8_t *)data;
+
+        if (data == NULL || data_size > UINT32_C(8)) {
+            return kStatus_Fail;
+        }
+        for (polls = UINT32_C(0);
+             polls < NCR2_FLEXSPI_POLL_LIMIT;
+             ++polls) {
+            const uint32_t interrupt = FLEXSPI->INTR;
+            const uint32_t available =
+                ((FLEXSPI->IPRXFSTS & FLEXSPI_IPRXFSTS_FILL_MASK) >>
+                 FLEXSPI_IPRXFSTS_FILL_SHIFT) *
+                UINT32_C(8);
+            if ((interrupt & NCR2_FLEXSPI_ERROR_MASK) !=
+                UINT32_C(0)) {
+                return kStatus_Fail;
+            }
+            if (available >= data_size) {
+                break;
+            }
+        }
+        if (polls == NCR2_FLEXSPI_POLL_LIMIT) {
+            return kStatus_Timeout;
+        }
+        for (uint32_t index = UINT32_C(0);
+             index < data_size;
+             ++index) {
+            const uint32_t value =
+                FLEXSPI->RFDR[index / UINT32_C(4)];
+            output[index] =
+                (uint8_t)(
+                    value >>
+                    ((index & UINT32_C(3)) * UINT32_C(8)));
+        }
+        FLEXSPI->INTR = FLEXSPI_INTR_IPRXWA_MASK;
+    }
+
+    for (polls = UINT32_C(0);
+         polls < NCR2_FLEXSPI_POLL_LIMIT;
+         ++polls) {
+        const uint32_t interrupt = FLEXSPI->INTR;
+        if ((interrupt & NCR2_FLEXSPI_ERROR_MASK) != UINT32_C(0)) {
+            return kStatus_Fail;
+        }
+        if ((interrupt & FLEXSPI_INTR_IPCMDDONE_MASK) !=
+            UINT32_C(0)) {
+            FLEXSPI->INTR = FLEXSPI_INTR_IPCMDDONE_MASK;
+            return kStatus_Success;
+        }
+    }
+    return kStatus_Timeout;
 }
 
 static NCR2_RAMFUNC status_t ram_read_status(uint8_t *status_byte)
@@ -104,7 +236,21 @@ static NCR2_RAMFUNC status_t ram_read_status(uint8_t *status_byte)
     return status;
 }
 
-static NCR2_RAMFUNC status_t ram_write_enable(
+static NCR2_RAMFUNC status_t ram_software_reset(void)
+{
+    FLEXSPI->MCR0 |= FLEXSPI_MCR0_SWRESET_MASK;
+    for (uint32_t polls = UINT32_C(0);
+         polls < NCR2_FLEXSPI_RESET_POLL_LIMIT;
+         ++polls) {
+        if ((FLEXSPI->MCR0 & FLEXSPI_MCR0_SWRESET_MASK) ==
+            UINT32_C(0)) {
+            return kStatus_Success;
+        }
+    }
+    return kStatus_Timeout;
+}
+
+static NCR2_RAMFUNC int ram_write_enable(
     uint32_t flash_offset)
 {
     uint8_t status_byte;
@@ -117,14 +263,17 @@ static NCR2_RAMFUNC status_t ram_write_enable(
             UINT32_C(0));
 
     if (status != kStatus_Success) {
-        return status;
+        return NCR2_NOR_BACKEND_WRITE_ENABLE_TRANSFER;
     }
     status = ram_read_status(&status_byte);
-    if (status == kStatus_Success &&
-        (status_byte & NCR2_W25Q_STATUS_WRITE_ENABLE) == UINT8_C(0)) {
-        return kStatus_Fail;
+    if (status != kStatus_Success) {
+        return NCR2_NOR_BACKEND_WRITE_ENABLE_TRANSFER;
     }
-    return status;
+    if ((status_byte & NCR2_W25Q_STATUS_WRITE_ENABLE) ==
+        UINT8_C(0)) {
+        return NCR2_NOR_BACKEND_WRITE_ENABLE_LATCH;
+    }
+    return 0;
 }
 
 /*
@@ -132,19 +281,29 @@ static NCR2_RAMFUNC status_t ram_write_enable(
  * before WIP clears is unsafe. Controller read errors are reset and retried
  * here instead of returning into unavailable flash.
  */
-static NCR2_RAMFUNC void ram_wait_until_flash_idle(void)
+static NCR2_RAMFUNC int ram_wait_until_flash_idle(void)
 {
-    for (;;) {
+    uint32_t status_errors = UINT32_C(0);
+
+    for (uint32_t polls = UINT32_C(0);
+         polls < NCR2_FLASH_BUSY_POLL_LIMIT;
+         ++polls) {
         uint8_t status_byte;
 
         if (ram_read_status(&status_byte) == kStatus_Success) {
+            status_errors = UINT32_C(0);
             if ((status_byte & NCR2_W25Q_STATUS_BUSY) == UINT8_C(0)) {
-                return;
+                return 0;
             }
         } else {
-            FLEXSPI_SoftwareReset(FLEXSPI);
+            ++status_errors;
+            if (status_errors >= NCR2_FLASH_STATUS_ERROR_LIMIT ||
+                ram_software_reset() != kStatus_Success) {
+                return NCR2_NOR_BACKEND_CONTROLLER_TIMEOUT;
+            }
         }
     }
+    return NCR2_NOR_BACKEND_BUSY_TIMEOUT;
 }
 
 static NCR2_RAMFUNC int ram_configure_and_probe(void)
@@ -212,7 +371,9 @@ static NCR2_RAMFUNC int ram_configure_and_probe(void)
         NCR2_LUT_FIRST_WORD,
         lut,
         NCR2_LUT_WORD_COUNT);
-    FLEXSPI_SoftwareReset(FLEXSPI);
+    if (ram_software_reset() != kStatus_Success) {
+        return -1;
+    }
     if (ram_transfer(
             NCR2_LUT_SEQUENCE_READ_ID,
             UINT32_C(0),
@@ -231,11 +392,13 @@ static NCR2_RAMFUNC int ram_configure_and_probe(void)
 
 static NCR2_RAMFUNC int ram_erase_sector(uint32_t flash_offset)
 {
-    status_t enable_status = ram_write_enable(flash_offset);
+    int enable_status = ram_write_enable(UINT32_C(0));
+    int wait_status;
     status_t erase_status;
+    status_t reset_status;
 
-    if (enable_status != kStatus_Success) {
-        return -1;
+    if (enable_status != 0) {
+        return enable_status;
     }
     erase_status =
         ram_transfer(
@@ -244,9 +407,17 @@ static NCR2_RAMFUNC int ram_erase_sector(uint32_t flash_offset)
             kFLEXSPI_Command,
             NULL,
             UINT32_C(0));
-    ram_wait_until_flash_idle();
-    FLEXSPI_SoftwareReset(FLEXSPI);
-    return erase_status == kStatus_Success ? 0 : -1;
+    wait_status = ram_wait_until_flash_idle();
+    reset_status = ram_software_reset();
+    if (wait_status != 0) {
+        return wait_status;
+    }
+    if (reset_status != kStatus_Success) {
+        return NCR2_NOR_BACKEND_CONTROLLER_TIMEOUT;
+    }
+    return erase_status == kStatus_Success
+               ? 0
+               : NCR2_NOR_BACKEND_ERASE_TRANSFER;
 }
 
 static NCR2_RAMFUNC int ram_program_page(
@@ -256,8 +427,10 @@ static NCR2_RAMFUNC int ram_program_page(
 {
     uint32_t aligned_data[NCR2_NOR_PAGE_SIZE / sizeof(uint32_t)];
     uint8_t *aligned_bytes = (uint8_t *)aligned_data;
-    status_t enable_status;
+    int enable_status;
+    int wait_status;
     status_t program_status;
+    status_t reset_status;
 
     for (uint32_t index = UINT32_C(0);
          index < length;
@@ -265,8 +438,8 @@ static NCR2_RAMFUNC int ram_program_page(
         aligned_bytes[index] = source[index];
     }
     enable_status = ram_write_enable(flash_offset);
-    if (enable_status != kStatus_Success) {
-        return -1;
+    if (enable_status != 0) {
+        return enable_status;
     }
     program_status =
         ram_transfer(
@@ -275,9 +448,17 @@ static NCR2_RAMFUNC int ram_program_page(
             kFLEXSPI_Write,
             aligned_data,
             length);
-    ram_wait_until_flash_idle();
-    FLEXSPI_SoftwareReset(FLEXSPI);
-    return program_status == kStatus_Success ? 0 : -1;
+    wait_status = ram_wait_until_flash_idle();
+    reset_status = ram_software_reset();
+    if (wait_status != 0) {
+        return wait_status;
+    }
+    if (reset_status != kStatus_Success) {
+        return NCR2_NOR_BACKEND_CONTROLLER_TIMEOUT;
+    }
+    return program_status == kStatus_Success
+               ? 0
+               : NCR2_NOR_BACKEND_PROGRAM_TRANSFER;
 }
 
 static int backend_read(void *opaque,
@@ -313,7 +494,8 @@ static int backend_erase_sector(void *opaque, uint32_t address)
 
     if (context == NULL ||
         context->initialized == UINT8_C(0) ||
-        !mutation_allowed(address, NCR2_NOR_SECTOR_SIZE) ||
+        !mutation_allowed(
+            context, address, NCR2_NOR_SECTOR_SIZE) ||
         (address & (NCR2_NOR_SECTOR_SIZE - UINT32_C(1))) !=
             UINT32_C(0)) {
         return -1;
@@ -344,7 +526,7 @@ static int backend_program_page(void *opaque,
         length == UINT32_C(0) ||
         length > NCR2_NOR_PAGE_SIZE ||
         length > NCR2_NOR_PAGE_SIZE - page_offset ||
-        !mutation_allowed(address, length)) {
+        !mutation_allowed(context, address, length)) {
         return -1;
     }
     interrupt_state = __get_PRIMASK();
@@ -371,7 +553,7 @@ static int backend_sync(void *opaque,
 
     if (context == NULL ||
         context->initialized == UINT8_C(0) ||
-        !mutation_allowed(address, length)) {
+        !mutation_allowed(context, address, length)) {
         return -1;
     }
     SCB_InvalidateDCache_by_Addr(
@@ -383,7 +565,8 @@ static int backend_sync(void *opaque,
     return 0;
 }
 
-uint16_t ncr2_flexspi_nor_init(ncr2_nor_t *nor)
+static uint16_t initialize_nor(ncr2_nor_t *nor,
+                               uint8_t full_flash_mutation)
 {
     ncr2_nor_operations_t operations;
     uint32_t interrupt_state;
@@ -393,6 +576,7 @@ uint16_t ncr2_flexspi_nor_init(ncr2_nor_t *nor)
         return NCR2_FLEXSPI_NOR_INVALID_ARGUMENT;
     }
     g_context.initialized = UINT8_C(0);
+    g_context.full_flash_mutation = full_flash_mutation;
     interrupt_state = __get_PRIMASK();
     __disable_irq();
     probe_status = ram_configure_and_probe();
@@ -410,9 +594,22 @@ uint16_t ncr2_flexspi_nor_init(ncr2_nor_t *nor)
     operations.erase_sector = backend_erase_sector;
     operations.program_page = backend_program_page;
     operations.sync_after_mutation = backend_sync;
-    if (ncr2_nor_init(nor, &operations) != NCR2_NOR_OK) {
+    if ((full_flash_mutation == UINT8_C(0)
+             ? ncr2_nor_init(nor, &operations)
+             : ncr2_nor_init_full_flash(nor, &operations)) !=
+        NCR2_NOR_OK) {
         g_context.initialized = UINT8_C(0);
         return NCR2_FLEXSPI_NOR_POLICY_INIT_FAILED;
     }
     return NCR2_FLEXSPI_NOR_OK;
+}
+
+uint16_t ncr2_flexspi_nor_init(ncr2_nor_t *nor)
+{
+    return initialize_nor(nor, UINT8_C(0));
+}
+
+uint16_t ncr2_flexspi_nor_init_full_flash(ncr2_nor_t *nor)
+{
+    return initialize_nor(nor, UINT8_C(1));
 }

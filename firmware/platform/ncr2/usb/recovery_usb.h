@@ -12,6 +12,7 @@ enum ncr2_recovery_usb_status {
 };
 
 uint16_t ncr2_recovery_usb_start(recovery_engine_t *engine);
+void ncr2_recovery_usb_service(void);
 void ncr2_recovery_usb_isr(void);
 
 #endif

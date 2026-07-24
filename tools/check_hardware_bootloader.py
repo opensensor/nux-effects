@@ -28,14 +28,23 @@ REQUIRED_SYMBOLS = {
     "ncr2_board_make_recovery_request",
     "ncr2_board_recovery_input_init",
     "ncr2_board_recovery_requested",
-    "ncr2_board_usb_clock_init",
-    "ncr2_board_usb_irq_enable",
     "ncr2_board_warm_reset",
     "ncr2_board_watchdog_start_trial",
     "ncr2_flexspi_nor_init",
+    "recovery_storage_init",
+}
+
+XIP_RECOVERY_SYMBOLS = {
+    "ncr2_board_usb_clock_init",
+    "ncr2_board_usb_irq_enable",
     "ncr2_recovery_usb_start",
     "recovery_engine_init",
-    "recovery_storage_init",
+}
+
+EMBEDDED_RECOVERY_SYMBOLS = {
+    "__ram_recovery_blob_start",
+    "__ram_recovery_blob_end",
+    "launch_embedded_ram_recovery",
 }
 
 USB_STACK_SYMBOLS = {
@@ -217,6 +226,16 @@ def main() -> int:
         action="store_true",
         help="require the nonzero-ID USB stack to survive link GC",
     )
+    parser.add_argument(
+        "--expect-embedded-ram-recovery",
+        action="store_true",
+        help="require the hardware bootloader to contain the RAM updater",
+    )
+    parser.add_argument(
+        "--ram-recovery-bin",
+        type=Path,
+        help="require the embedded blob to equal this checked RAM image",
+    )
     arguments = parser.parse_args()
 
     nm = shutil.which("arm-none-eabi-nm")
@@ -232,10 +251,30 @@ def main() -> int:
         parser.error("Arm GNU nm/readelf/objcopy/objdump are required")
     if not arguments.elf.is_file():
         parser.error(f"ELF does not exist: {arguments.elf}")
+    if (
+        arguments.expect_usb_stack
+        and arguments.expect_embedded_ram_recovery
+    ):
+        parser.error(
+            "XIP USB stack and embedded RAM recovery expectations conflict"
+        )
+    if (
+        arguments.ram_recovery_bin is not None
+        and not arguments.expect_embedded_ram_recovery
+    ):
+        parser.error(
+            "--ram-recovery-bin requires "
+            "--expect-embedded-ram-recovery"
+        )
 
     nm_output = run(nm, "-n", str(arguments.elf))
     symbols = parse_symbols(nm_output)
-    missing = sorted(REQUIRED_SYMBOLS - symbols.keys())
+    expected_symbols = set(REQUIRED_SYMBOLS)
+    if arguments.expect_embedded_ram_recovery:
+        expected_symbols |= EMBEDDED_RECOVERY_SYMBOLS
+    else:
+        expected_symbols |= XIP_RECOVERY_SYMBOLS
+    missing = sorted(expected_symbols - symbols.keys())
     if missing:
         raise SystemExit(
             "hardware bootloader is missing symbols: "
@@ -336,8 +375,51 @@ def main() -> int:
                     f"{alignment}-byte aligned: 0x{address:08x}"
                 )
 
+    if arguments.expect_embedded_ram_recovery:
+        blob_start = symbols["__ram_recovery_blob_start"]
+        blob_end = symbols["__ram_recovery_blob_end"]
+        section_start, section_end = section_bounds(
+            sections, ".ram_recovery_blob"
+        )
+        if (
+            blob_start != section_start
+            or blob_end != section_end
+            or blob_end <= blob_start
+        ):
+            raise SystemExit(
+                "embedded RAM recovery symbols do not cover its section"
+            )
+        if arguments.ram_recovery_bin is not None:
+            if not arguments.ram_recovery_bin.is_file():
+                parser.error(
+                    "RAM recovery binary does not exist: "
+                    f"{arguments.ram_recovery_bin}"
+                )
+            with tempfile.TemporaryDirectory() as directory:
+                extracted = Path(directory) / "ram-recovery.bin"
+                subprocess.run(
+                    [
+                        objcopy,
+                        "--dump-section",
+                        f".ram_recovery_blob={extracted}",
+                        str(arguments.elf),
+                    ],
+                    check=True,
+                )
+                embedded = extracted.read_bytes()
+            expected = arguments.ram_recovery_bin.read_bytes()
+            if embedded != expected:
+                raise SystemExit(
+                    "embedded RAM recovery differs from checked binary"
+                )
+
     mode = "write-enabled" if arguments.write_enabled else "read-only"
-    usb = "enumerating" if arguments.expect_usb_stack else "ID-guarded"
+    if arguments.expect_embedded_ram_recovery:
+        usb = "embedded-RAM recovery"
+    elif arguments.expect_usb_stack:
+        usb = "enumerating"
+    else:
+        usb = "ID-guarded"
     print(
         "Hardware bootloader verified: "
         f"bootable, {mode}, {usb}, complete vectors/symbols"

@@ -22,6 +22,22 @@ EXPECTED_ABSOLUTE_SYMBOLS = {
     "ncr2_factory_engine_stack": 0x20018000,
     "ncr2_factory_engine_reset": 0x0000E4B5,
 }
+BOOT_TRIAL_MAILBOX = 0x400F8028
+SCB_AIRCR = 0xE000ED0C
+SCB_ICIALLU = 0xE000EF50
+AIRCR_SYSRESETREQ = 0x05FA0004
+FACTORY_COMPAT_MPU_WORDS = {
+    0xC0000010,
+    0x03100039,
+    0x80000011,
+    0x0310003B,
+    0x60000012,
+    0x03030039,
+    0x03030021,
+    0x20000015,
+    0x20200016,
+    0x03030023,
+}
 
 
 def run(tool: str, *arguments: str) -> str:
@@ -64,6 +80,7 @@ def main() -> int:
     required = {
         "Default_Handler",
         "Reset_Handler",
+        "boot_trial_arm_confirmation",
         "g_factory_bridge_vectors",
         *EXPECTED_ABSOLUTE_SYMBOLS,
     }
@@ -138,10 +155,65 @@ def main() -> int:
             "factory bridge is missing handoff instructions: "
             + ", ".join(missing_instructions)
         )
+    copy_match = re.search(
+        r"<bridge_copy>:(.*?)"
+        r"ldr\.w\s+r3,\s*\[r1\],\s*#4",
+        disassembly,
+        re.DOTALL,
+    )
+    if copy_match is None:
+        raise SystemExit("factory bridge copy loop was not found")
+    if re.search(
+        r"\bldr\s+r1,\s*\[pc,",
+        copy_match.group(1),
+    ) is None:
+        raise SystemExit(
+            "factory bridge does not reload its caller-clobbered "
+            "engine source before the ITCM copy"
+        )
+
+    with tempfile.TemporaryDirectory() as directory:
+        binary_path = Path(directory) / "bridge.bin"
+        subprocess.run(
+            [objcopy, "-O", "binary", str(arguments.elf), str(binary_path)],
+            check=True,
+        )
+        binary = binary_path.read_bytes()
+    required_words = {
+        "trial mailbox": BOOT_TRIAL_MAILBOX,
+        "SCB AIRCR": SCB_AIRCR,
+        "SCB ICIALLU": SCB_ICIALLU,
+        "AIRCR reset request": AIRCR_SYSRESETREQ,
+    }
+    for name, value in required_words.items():
+        if struct.pack("<I", value) not in binary:
+            raise SystemExit(
+                f"factory bridge lacks {name} constant 0x{value:08x}"
+            )
+
+    if "ncr2_factory_compat_prepare" in symbols:
+        missing_mpu_words = sorted(
+            value
+            for value in FACTORY_COMPAT_MPU_WORDS
+            if struct.pack("<I", value) not in binary
+        )
+        if missing_mpu_words:
+            formatted = ", ".join(
+                f"0x{value:08x}" for value in missing_mpu_words
+            )
+            raise SystemExit(
+                "factory compatibility bridge lacks MPU words: "
+                + formatted
+            )
+        if "CLOCK_InitArmPll" not in symbols:
+            raise SystemExit(
+                "factory compatibility bridge lacks ARM PLL setup"
+            )
 
     print(
-        "Factory bridge verified: Metal vectors, "
-        "0x1e000-byte ITCM copy, SDRAM handoff"
+        "Factory bridge verified: Metal vectors, trial confirmation, "
+        "post-call source reload, 0x1e000-byte ITCM copy, "
+        "I-cache invalidation, SDRAM handoff"
     )
     return 0
 

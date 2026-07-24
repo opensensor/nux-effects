@@ -22,6 +22,7 @@ class RecoveryEngineTests(unittest.TestCase):
 #include "boot_state.h"
 #include "crc32.h"
 #include "ncr2_flash_layout.h"
+#include "ncr2_nor.h"
 #include "pedal_image.h"
 #include "recovery_engine.h"
 #include "sha256.h"
@@ -33,6 +34,8 @@ typedef struct mock_context {
     unsigned int program_calls;
     unsigned int state_calls;
     unsigned int reboot_calls;
+    uint32_t erased_address;
+    uint32_t erased_length;
 } mock_context_t;
 
 static int resolve_mock(uint32_t address,
@@ -89,6 +92,8 @@ static int mock_erase(void *opaque,
         return -1;
     }
     memset(destination, 0xff, length);
+    context->erased_address = address;
+    context->erased_length = length;
     ++context->erase_calls;
     return 0;
 }
@@ -197,6 +202,7 @@ int main(void)
     backend.read = mock_read;
     backend.erase = mock_erase;
     backend.program = mock_program;
+    backend.get_log = NULL;
     backend.store_boot_state = mock_store_state;
     backend.request_reboot = mock_reboot;
     recovery_engine_init(&engine, &backend, &state, BOOT_SLOT_A, 0x1234);
@@ -220,7 +226,14 @@ int main(void)
     }
 
     make_request(
-        &request, RECOVERY_COMMAND_BEGIN_IMAGE, 1, 0, 0, 0, NULL, 0);
+        &request,
+        RECOVERY_COMMAND_BEGIN_IMAGE,
+        1,
+        0,
+        0,
+        sizeof(image),
+        NULL,
+        0);
     if (process_expect(
             &engine, &request, &response, RECOVERY_STATUS_OK) != 0) {
         return 4;
@@ -249,6 +262,9 @@ int main(void)
         return 8;
     }
     if (context.erase_calls != 1) return 9;
+    if (context.erased_address != NCR2_APPLICATION_B_ADDRESS ||
+        context.erased_length != NCR2_APPLICATION_MANIFEST_SIZE +
+                                 NCR2_NOR_SECTOR_SIZE) return 27;
 
     memset(image, 0xff, sizeof(image));
     manifest = (pedal_image_manifest_t *)image;

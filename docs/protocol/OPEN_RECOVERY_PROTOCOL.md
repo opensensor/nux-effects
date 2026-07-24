@@ -1,10 +1,11 @@
 # Open NCR-2 recovery protocol
 
-Status: packet, range-validation, retry-cache, update transaction, metadata
-journal, and trial/confirmation policy layers implemented and host-tested.
-An opt-in hardware target links the USB transport and FlexSPI backend end to
-end, read-only and non-enumerating by default. It has not yet been executed
-on the pedal.
+Status: protocol version 2 is implemented and host-tested. The USB transport,
+open boot path, A/B metadata, and read-only `GET_INFO` path have run on the
+pedal. Version 1 exposed a hardware defect: `ERASE_SLOT` erased an entire
+2 MiB slot synchronously and an MCUX FlexSPI poll could wait forever.
+Version 2 bounds every controller/busy poll and erases only the sectors
+covered by the declared incoming image.
 
 ## Transport
 
@@ -12,8 +13,11 @@ The intended recovery transport is one vendor-HID interface with 64-byte
 input and output reports. This matches the physical shape already proven on
 the pedal while using an independent, versioned packet format.
 
-The open firmware must use an appropriately assigned development/community
-USB VID/PID before distribution. NUX's VID/PID is not part of this protocol.
+Development hardware temporarily borrows `9527:c157` so existing host setup
+continues to work. The product string `NUX Effects Open Recover`, packet
+magic, protocol version, and `bcdDevice=0.02` distinguish it from the stock
+NUX updater. A project-owned USB identity remains mandatory before
+distribution.
 
 ## Packet layout
 
@@ -49,20 +53,37 @@ The CRC is the reflected IEEE CRC-32 used by zlib.
 | 7 | `SET_PENDING` | yes |
 | 8 | `REBOOT` | yes |
 | 9 | `GET_LOG` | no |
+| 10 | `BEGIN_FULL_FLASH` | yes |
+| 11 | `ERASE_FULL_FLASH` | yes |
+| 12 | `FINALIZE_FULL_FLASH` | yes |
 
 `BEGIN_IMAGE` establishes a fresh nonzero session nonce and resets sequence
-handling. Every subsequent session command must match the nonce and exact
-expected sequence. Retries receive the prior response; skipped or reordered
-commands are rejected.
+handling. In protocol version 2 its `offset` field declares the exact
+manifest-plus-payload byte count. The engine rejects sizes smaller than a
+manifest plus two vectors or larger than one slot. Every subsequent session
+command must match the nonce and exact expected sequence. Retries receive the
+prior response; skipped or reordered commands are rejected.
 
-The low bit of `flags` selects slot A (`0`) or B (`1`). All other flag bits
-are currently invalid. `GET_INFO` uses zero flags. The target selected by
+The low bit of `flags` selects slot A (`0`) or B (`1`). In the XIP A/B
+personality, every other bit is invalid. In the RAM personality, bit 15
+(`0x8000`) identifies a whole-flash transaction and is accepted only when
+`GET_INFO` advertises
+`RECOVERY_CAPABILITY_FULL_FLASH_RAM`. `GET_INFO` uses zero flags. The target selected by
 `BEGIN_IMAGE` must be different from both the confirmed and active slot.
 
 `WRITE_CHUNK` carries `1..32` payload bytes. Its `offset` must equal the end
 of the previous successful write, which makes the transfer contiguous and
-prevents holes. `READ_CHUNK` uses `length` as the requested read size and
-sends that many zero payload bytes so both request CRCs remain unambiguous.
+prevents holes. Both write and read ranges must remain inside the byte count
+declared by `BEGIN_IMAGE`. `READ_CHUNK` uses `length` as the requested read
+size and sends that many zero payload bytes so both request CRCs remain
+unambiguous.
+
+`ERASE_SLOT` rounds the declared byte count up to the W25Q64's 4 KiB erase
+unit and erases exactly that prefix of the inactive slot. A 5.8 KiB bridge
+therefore erases two sectors, not 512. Blank sectors are read and skipped.
+The RT1051 FlexSPI transfer, software-reset, and NOR-busy polls all have
+finite limits; a controller fault returns a diagnostic backend error rather
+than wedging USB forever.
 
 `FINALIZE_IMAGE` re-reads the manifest and payload through the flash backend,
 then independently validates:
@@ -101,7 +122,7 @@ region.
 The intended transaction is:
 
 1. `GET_INFO`
-2. `BEGIN_IMAGE`
+2. `BEGIN_IMAGE` with the exact total slot-image length in `offset`
 3. `ERASE_SLOT` for the inactive slot
 4. ordered `WRITE_CHUNK` packets
 5. optional `READ_CHUNK` verification
@@ -122,6 +143,47 @@ reset, torn token, stale sequence, or replay cannot confirm an image.
 
 No metadata record is written until `FINALIZE_IMAGE` has independently
 validated the complete inactive slot.
+
+## RAM-resident whole-flash restore
+
+Whole-flash restore is intentionally a separate personality, built as
+`ncr2_ram_recovery`. The production development build embeds that checked
+binary in the protected bootloader partition. On physical recovery entry,
+the small XIP stub copies it to SDRAM and jumps to its vector table before
+USB starts. It does not consume an application/effect slot. A post-link
+checker rejects any load segment, required entry point, or direct branch
+into the FlexSPI XIP window, and the bootloader checker verifies that the
+embedded bytes equal the independently checked RAM binary. Only this image
+calls `ncr2_flexspi_nor_init_full_flash()` and
+`recovery_engine_enable_full_flash()`.
+
+The XIP bootloader compiles the command numbers so it can return
+`FULL_FLASH_DISABLED`, but it neither advertises the capability nor widens
+its NOR write policy.
+
+A destructive transaction is:
+
+1. `GET_INFO`, requiring capability bit `0x20`;
+2. `BEGIN_FULL_FLASH`, with:
+   - flags exactly `0x8000`;
+   - session field `0x45504957` (little-endian `WIPE`);
+   - offset exactly `0x00800000`; and
+   - payload exactly the expected 32-byte SHA-256;
+3. `ERASE_FULL_FLASH`;
+4. ordered `WRITE_CHUNK` reports covering all 8 MiB;
+5. optional `READ_CHUNK` reports;
+6. `FINALIZE_FULL_FLASH`, which re-hashes all 8 MiB; and
+7. `REBOOT`.
+
+There is no `SET_PENDING` step because the transaction replaces the journal,
+bootloader, and both slots. `REBOOT` is rejected until the complete-chip hash
+matches. Host tooling additionally requires the literal confirmation
+`WIPE-ALL-8MIB`.
+
+This mode is deliberately not power-loss tolerant after the full erase. If
+power or USB is lost before a complete verified rewrite, the chip may be
+blank or incomplete and the immutable RT1051 ROM downloader is the recovery
+path. This is factory recovery, not the normal update mechanism.
 
 Metadata uses two 4 KiB sectors of 32-byte append-only records. A partially
 programmed record has no valid CRC and is ignored. When the active sector is
@@ -157,13 +219,31 @@ python3 tools/pedalctl.py inspect-slot \
 
 The `info` and `upload` commands are implemented against `hidraw`, including
 exact retries, sequence checking, inactive-slot selection, finalization, and
-pending activation. They must not be used until the matching open recovery
-firmware and a non-NUX USB identity are running on the pedal.
+pending activation. The host and bootloader must use the same protocol
+version; the version-2 host intentionally refuses the installed version-1
+recovery image.
+
+After booting the embedded RAM recovery personality with the normal physical
+recovery gesture, a complete image can be restored with:
+
+```sh
+python3 tools/pedalctl.py restore-full \
+  --device /dev/hidrawN \
+  --allow-borrowed-nux-id \
+  --confirm WIPE-ALL-8MIB \
+  --expected-sha256 <64-hex-digit-sha256> \
+  artifacts/private/full-image.bin
+```
+
+The input must be exactly 8 MiB and contain plausible `FCFB` and IVT headers.
+The default per-command timeout is ten minutes because the erase is one
+guarded transaction.
 
 ## Status values
 
 In addition to packet-format errors, the engine reports explicit failures for
 backend I/O, invalid transaction phase, invalid image, active-slot selection,
-premature activation, unsupported flags, and out-of-order writes. Failed
+premature activation, unsupported flags, disabled full-flash recovery, and
+out-of-order writes. Failed
 commands do not consume a sequence number, so the host can correct or retry
 the same step.

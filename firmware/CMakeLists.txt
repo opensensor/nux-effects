@@ -27,6 +27,16 @@ option(
     OFF
 )
 option(
+    NCR2_BUILD_RAM_RECOVERY
+    "Build the SDRAM-resident whole-flash recovery application"
+    OFF
+)
+option(
+    NCR2_EMBED_RAM_RECOVERY
+    "Embed and launch the SDRAM recovery image from the hardware bootloader"
+    OFF
+)
+option(
     NCR2_BUILD_FACTORY_SLOT_APP
     "Build the unapproved source app for the recovered factory slot ABI"
     OFF
@@ -58,6 +68,11 @@ option(
     "Allow the hardware bootloader to enumerate with assigned USB IDs"
     OFF
 )
+option(
+    NCR2_ALLOW_BORROWED_NUX_DFU_ID
+    "Bench-only override allowing the stock NUX 9527:c157 USB identity"
+    OFF
+)
 set(
     NCR2_OPEN_USB_VID
     "0"
@@ -79,6 +94,10 @@ set(
 
 set(NCR2_EFFECTIVE_USB_VID 0)
 set(NCR2_EFFECTIVE_USB_PID 0)
+set(NCR2_BORROWED_NUX_DFU_ID_VALUE 0)
+if(NCR2_ALLOW_BORROWED_NUX_DFU_ID)
+    set(NCR2_BORROWED_NUX_DFU_ID_VALUE 1)
+endif()
 if(NCR2_ENABLE_HARDWARE_USB_ENUMERATION)
     math(EXPR NCR2_USB_VID_VALUE "${NCR2_OPEN_USB_VID}")
     math(EXPR NCR2_USB_PID_VALUE "${NCR2_OPEN_USB_PID}")
@@ -91,10 +110,13 @@ if(NCR2_ENABLE_HARDWARE_USB_ENUMERATION)
             "USB enumeration requires nonzero 16-bit assigned VID/PID"
         )
     endif()
-    if(NCR2_USB_VID_VALUE EQUAL 38183)
+    if(NCR2_USB_VID_VALUE EQUAL 38183 AND
+       NOT (NCR2_ALLOW_BORROWED_NUX_DFU_ID AND
+            NCR2_USB_PID_VALUE EQUAL 49495))
         message(
             FATAL_ERROR
-            "NUX VID 0x9527 is forbidden for open firmware"
+            "NUX VID 0x9527 is forbidden for open firmware unless the "
+            "bench-only borrowed 9527:c157 override is explicit"
         )
     endif()
     set(NCR2_EFFECTIVE_USB_VID ${NCR2_USB_VID_VALUE})
@@ -104,6 +126,10 @@ endif()
 set(NCR2_HARDWARE_WRITE_VALUE 0)
 if(NCR2_HARDWARE_RECOVERY_WRITE_ENABLE)
     set(NCR2_HARDWARE_WRITE_VALUE 1)
+endif()
+set(NCR2_EMBED_RAM_RECOVERY_VALUE 0)
+if(NCR2_EMBED_RAM_RECOVERY)
+    set(NCR2_EMBED_RAM_RECOVERY_VALUE 1)
 endif()
 
 set(NCR2_CPU_FLAGS
@@ -222,11 +248,72 @@ add_executable(
     ncr2_factory_bridge
     EXCLUDE_FROM_ALL
     factory_bridge/src/startup.S
+    bootloader/src/boot_trial.c
+)
+target_include_directories(
+    ncr2_factory_bridge
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
 )
 ncr2_firmware_target(
     ncr2_factory_bridge
     ${CMAKE_CURRENT_SOURCE_DIR}/app/ncr2_app.ld
 )
+
+if(EXISTS
+   "${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/MIMXRT1051.h")
+    set(
+        NCR2_FACTORY_COMPAT_CLOCK_SOURCE
+        ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers/fsl_clock.c
+    )
+    foreach(
+        target
+        IN ITEMS
+            ncr2_factory_compat_bridge
+            ncr2_factory_compat_diagnostic
+    )
+        add_executable(
+            ${target}
+            EXCLUDE_FROM_ALL
+            factory_bridge/src/startup.S
+            factory_bridge/src/board_compat.c
+            bootloader/src/boot_trial.c
+            ${NCR2_FACTORY_COMPAT_CLOCK_SOURCE}
+        )
+        target_include_directories(
+            ${target}
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
+        )
+        target_include_directories(
+            ${target}
+            SYSTEM PRIVATE
+                ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+                ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+                ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+        )
+        target_compile_definitions(
+            ${target}
+            PRIVATE
+                CPU_MIMXRT1051DVL6B
+                NCR2_FACTORY_COMPAT_PREPARE=1
+        )
+        set_source_files_properties(
+            ${NCR2_FACTORY_COMPAT_CLOCK_SOURCE}
+            PROPERTIES COMPILE_OPTIONS "-w"
+        )
+        ncr2_firmware_target(
+            ${target}
+            ${CMAKE_CURRENT_SOURCE_DIR}/app/ncr2_app.ld
+        )
+    endforeach()
+    target_compile_definitions(
+        ncr2_factory_compat_diagnostic
+        PRIVATE
+            NCR2_FACTORY_COMPAT_DIAGNOSTIC=1
+    )
+endif()
 
 if(NCR2_BUILD_FACTORY_SLOT_APP)
     if(NOT EXISTS
@@ -353,6 +440,7 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER)
             DATA_SECTION_IS_CACHEABLE=0
             NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
             NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
+            NCR2_ALLOW_BORROWED_NUX_DFU_ID=${NCR2_BORROWED_NUX_DFU_ID_VALUE}
     )
     target_compile_options(
         ncr2_mcux_usb_adapter
@@ -631,6 +719,7 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
             DATA_SECTION_IS_CACHEABLE=0
             NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
             NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
+            NCR2_ALLOW_BORROWED_NUX_DFU_ID=${NCR2_BORROWED_NUX_DFU_ID_VALUE}
     )
     target_compile_options(
         ncr2_hardware_link_probe
@@ -753,7 +842,9 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
                 NCR2_HARDWARE_STARTUP=1
                 NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
                 NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
+                NCR2_ALLOW_BORROWED_NUX_DFU_ID=${NCR2_BORROWED_NUX_DFU_ID_VALUE}
                 NCR2_HARDWARE_RECOVERY_WRITE_ENABLE=${NCR2_HARDWARE_WRITE_VALUE}
+                NCR2_EMBED_RAM_RECOVERY=${NCR2_EMBED_RAM_RECOVERY_VALUE}
         )
         ncr2_firmware_target(
             ncr2_hardware_bootloader
@@ -779,6 +870,134 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
             )
         endif()
     endif()
+
+    if(NCR2_BUILD_RAM_RECOVERY)
+        add_executable(
+            ncr2_ram_recovery
+            EXCLUDE_FROM_ALL
+            ram_recovery/src/startup.S
+            ram_recovery/src/main.c
+            bootloader/src/boot_journal.c
+            bootloader/src/boot_state.c
+            bootloader/src/crc32.c
+            bootloader/src/recovery_engine.c
+            bootloader/src/recovery_protocol.c
+            bootloader/src/recovery_storage.c
+            bootloader/src/sha256.c
+            platform/ncr2/board/ncr2_board.c
+            platform/ncr2/board/ncr2_watchdog.c
+            platform/ncr2/flexspi/ncr2_flexspi_nor.c
+            platform/ncr2/src/ncr2_freestanding.c
+            platform/ncr2/src/ncr2_nor.c
+            platform/ncr2/usb/recovery_usb.c
+            platform/ncr2/usb/recovery_usb_descriptor.c
+            ${NCR2_BOARD_VENDOR_SOURCES}
+            ${NCR2_FLEXSPI_VENDOR_SOURCE}
+            ${NCR2_USB_VENDOR_SOURCES}
+        )
+        target_include_directories(
+            ncr2_ram_recovery
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/board
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/flexspi
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/usb
+        )
+        target_include_directories(
+            ncr2_ram_recovery
+            SYSTEM PRIVATE
+                ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+                ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+                ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/flexspi
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/wdog01
+                ${NCR2_MCUX_SDK_ROOT}/core/components/lists
+                ${NCR2_MCUX_SDK_ROOT}/core/components/osa
+                ${NCR2_USB_MIDDLEWARE}/include
+                ${NCR2_USB_MIDDLEWARE}/device
+                ${NCR2_USB_MIDDLEWARE}/phy
+                ${NCR2_USB_OUTPUT}
+                ${NCR2_USB_OUTPUT}/class
+        )
+        target_compile_definitions(
+            ncr2_ram_recovery
+            PRIVATE
+                CPU_MIMXRT1051DVL6B
+                USB_STACK_BM
+                FSL_OSA_BM_TASK_ENABLE=0
+                FSL_OSA_BM_TIMER_CONFIG=0
+                SDK_OS_BAREMETAL
+                DATA_SECTION_IS_CACHEABLE=0
+                NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
+                NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
+                NCR2_ALLOW_BORROWED_NUX_DFU_ID=${NCR2_BORROWED_NUX_DFU_ID_VALUE}
+        )
+        ncr2_firmware_target(
+            ncr2_ram_recovery
+            ${CMAKE_CURRENT_SOURCE_DIR}/ram_recovery/ncr2_ram_recovery.ld
+        )
+        target_link_options(
+            ncr2_ram_recovery
+            PRIVATE
+                -Wl,-n
+                -Wl,--undefined=USB_OTG1_IRQHandler
+        )
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_custom_command(
+            TARGET ncr2_ram_recovery
+            POST_BUILD
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_ram_recovery.py
+                $<TARGET_FILE:ncr2_ram_recovery>
+                ${CMAKE_CURRENT_BINARY_DIR}/ncr2_ram_recovery.bin
+            VERBATIM
+        )
+    endif()
+
+    if(NCR2_EMBED_RAM_RECOVERY)
+        set(
+            NCR2_RAM_RECOVERY_BLOB_OBJECT
+            ${CMAKE_CURRENT_BINARY_DIR}/ncr2_ram_recovery_blob.o
+        )
+        add_custom_command(
+            OUTPUT ${NCR2_RAM_RECOVERY_BLOB_OBJECT}
+            COMMAND
+                ${CMAKE_OBJCOPY}
+                -I binary
+                -O elf32-littlearm
+                -B arm
+                --rename-section
+                .data=.ram_recovery_blob,alloc,load,readonly,data,contents
+                ncr2_ram_recovery.bin
+                ncr2_ram_recovery_blob.o
+            DEPENDS ncr2_ram_recovery
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            VERBATIM
+        )
+        add_custom_target(
+            ncr2_ram_recovery_blob
+            DEPENDS ${NCR2_RAM_RECOVERY_BLOB_OBJECT}
+        )
+        set_source_files_properties(
+            ${NCR2_RAM_RECOVERY_BLOB_OBJECT}
+            PROPERTIES
+                EXTERNAL_OBJECT TRUE
+                GENERATED TRUE
+        )
+        target_sources(
+            ncr2_hardware_bootloader
+            PRIVATE ${NCR2_RAM_RECOVERY_BLOB_OBJECT}
+        )
+        add_dependencies(
+            ncr2_hardware_bootloader
+            ncr2_ram_recovery_blob
+        )
+    endif()
 endif()
 
 if(NCR2_BUILD_HARDWARE_BOOTLOADER AND
@@ -788,5 +1007,25 @@ if(NCR2_BUILD_HARDWARE_BOOTLOADER AND
     message(
         FATAL_ERROR
         "NCR2_BUILD_HARDWARE_BOOTLOADER requires all three MCUX adapters"
+    )
+endif()
+
+if(NCR2_BUILD_RAM_RECOVERY AND
+   NOT (NCR2_BUILD_MCUX_USB_ADAPTER AND
+        NCR2_BUILD_MCUX_FLEXSPI_ADAPTER AND
+        NCR2_BUILD_MCUX_BOARD_ADAPTER))
+    message(
+        FATAL_ERROR
+        "NCR2_BUILD_RAM_RECOVERY requires all three MCUX adapters"
+    )
+endif()
+
+if(NCR2_EMBED_RAM_RECOVERY AND
+   NOT (NCR2_BUILD_HARDWARE_BOOTLOADER AND
+        NCR2_BUILD_RAM_RECOVERY))
+    message(
+        FATAL_ERROR
+        "NCR2_EMBED_RAM_RECOVERY requires both the hardware bootloader "
+        "and RAM recovery targets"
     )
 endif()

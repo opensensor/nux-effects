@@ -33,7 +33,7 @@ class PacketTests(unittest.TestCase):
         encoded = packet.encode()
         self.assertEqual(len(encoded), 64)
         self.assertEqual(encoded[:4], b"NXFX")
-        self.assertEqual(encoded[4], 1)
+        self.assertEqual(encoded[4], 2)
         self.assertEqual(encoded[5], 4)
         self.assertEqual(struct.unpack_from("<H", encoded, 0x14)[0], 3)
         self.assertEqual(pedalctl.Packet.decode(encoded), packet)
@@ -115,7 +115,33 @@ class FakeTransport:
                 command=request.command,
                 payload=payload,
             ).encode()
+        if request.command == pedalctl.COMMANDS["get-log"]:
+            payload = pedalctl.NOR_DIAGNOSTIC_STRUCT.pack(
+                pedalctl.NOR_DIAGNOSTIC_MAGIC,
+                1,
+                2,
+                3,
+                0x60600000,
+                0x200000,
+                4,
+                -11,
+                6,
+                0,
+                0x60604000,
+            )
+            return pedalctl.Packet(
+                command=request.command,
+                payload=payload,
+            ).encode()
         if request.command == pedalctl.COMMANDS["begin-image"]:
+            return pedalctl.Packet(
+                command=request.command,
+                flags=request.flags,
+                session=self.session,
+            ).encode()
+        if request.command == pedalctl.COMMANDS["begin-full-flash"]:
+            if request.session != pedalctl.FULL_FLASH_UNLOCK:
+                raise AssertionError("missing full-flash unlock")
             return pedalctl.Packet(
                 command=request.command,
                 flags=request.flags,
@@ -143,7 +169,10 @@ class ClientTests(unittest.TestCase):
         client = pedalctl.RecoveryClient(transport)
         info = client.get_info()
         self.assertEqual(info.confirmed_slot, 0)
-        self.assertEqual(client.begin(1), transport.session)
+        diagnostics = client.get_log()
+        self.assertEqual(diagnostics.backend_status, -11)
+        self.assertEqual(diagnostics.detail, 0x60604000)
+        self.assertEqual(client.begin(1, 0x1028), transport.session)
         client.erase()
         client.write(bytes(range(40)))
         self.assertEqual(client.read(4, 8), bytes(8))
@@ -153,8 +182,14 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(
             [request.command for request in transport.requests],
-            [1, 2, 3, 4, 4, 5, 6, 7, 8],
+            [1, 9, 2, 3, 4, 4, 5, 6, 7, 8],
         )
+        begin_request = next(
+            request
+            for request in transport.requests
+            if request.command == pedalctl.COMMANDS["begin-image"]
+        )
+        self.assertEqual(begin_request.offset, 0x1028)
         write_requests = [
             request
             for request in transport.requests
@@ -162,6 +197,31 @@ class ClientTests(unittest.TestCase):
         ]
         self.assertEqual([request.offset for request in write_requests], [0, 32])
         self.assertEqual([len(request.payload) for request in write_requests], [32, 8])
+
+    def test_client_sequences_full_flash_commands(self):
+        transport = FakeTransport()
+        client = pedalctl.RecoveryClient(transport)
+        digest = bytes(range(32))
+
+        self.assertEqual(
+            client.begin_full_flash(0x800000, digest),
+            transport.session,
+        )
+        client.erase_full_flash()
+        client.write(bytes(range(40)))
+        client.finalize_full_flash()
+        client.reboot()
+
+        self.assertEqual(
+            [request.command for request in transport.requests],
+            [10, 11, 4, 4, 12, 8],
+        )
+        self.assertTrue(
+            all(
+                request.flags == pedalctl.FLAG_FULL_FLASH
+                for request in transport.requests
+            )
+        )
 
 
 if __name__ == "__main__":

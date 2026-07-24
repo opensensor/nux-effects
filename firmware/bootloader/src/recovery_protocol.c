@@ -9,7 +9,7 @@
 static int command_is_valid(uint8_t command)
 {
     return command >= RECOVERY_COMMAND_GET_INFO &&
-           command <= RECOVERY_COMMAND_GET_LOG;
+           command <= RECOVERY_COMMAND_FINALIZE_FULL_FLASH;
 }
 
 int recovery_command_is_mutating(uint8_t command)
@@ -19,7 +19,10 @@ int recovery_command_is_mutating(uint8_t command)
            command == RECOVERY_COMMAND_WRITE_CHUNK ||
            command == RECOVERY_COMMAND_FINALIZE_IMAGE ||
            command == RECOVERY_COMMAND_SET_PENDING ||
-           command == RECOVERY_COMMAND_REBOOT;
+           command == RECOVERY_COMMAND_REBOOT ||
+           command == RECOVERY_COMMAND_BEGIN_FULL_FLASH ||
+           command == RECOVERY_COMMAND_ERASE_FULL_FLASH ||
+           command == RECOVERY_COMMAND_FINALIZE_FULL_FLASH;
 }
 
 void recovery_packet_finalize(recovery_packet_t *packet)
@@ -95,4 +98,3 @@ uint16_t recovery_resolve_range(uint8_t slot,
     *flash_address = NCR2_FLASH_XIP_BASE + slot_offset + offset;
     return RECOVERY_STATUS_OK;
 }
-

@@ -62,6 +62,33 @@ static int storage_program(void *opaque,
                : -1;
 }
 
+static int storage_get_log(void *opaque,
+                           void *destination,
+                           uint32_t capacity)
+{
+    recovery_storage_t *storage =
+        (recovery_storage_t *)opaque;
+    ncr2_nor_diagnostics_t diagnostics;
+
+    if (storage == NULL ||
+        storage->nor == NULL ||
+        destination == NULL ||
+        capacity < (uint32_t)sizeof(diagnostics)) {
+        return -1;
+    }
+    if (ncr2_nor_get_diagnostics(
+            storage->nor, &diagnostics) != NCR2_NOR_OK) {
+        return -1;
+    }
+    for (uint32_t index = UINT32_C(0);
+         index < (uint32_t)sizeof(diagnostics);
+         ++index) {
+        ((uint8_t *)destination)[index] =
+            ((const uint8_t *)&diagnostics)[index];
+    }
+    return (int)sizeof(diagnostics);
+}
+
 void recovery_storage_make_journal_backend(
     recovery_storage_t *storage,
     boot_journal_backend_t *backend)
@@ -131,6 +158,7 @@ void recovery_storage_make_backend(
     backend->read = storage_read;
     backend->erase = storage_erase;
     backend->program = storage_program;
+    backend->get_log = storage_get_log;
     backend->store_boot_state = storage_store_boot_state;
     backend->request_reboot = storage_request_reboot;
 }

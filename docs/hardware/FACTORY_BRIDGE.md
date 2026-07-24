@@ -18,6 +18,45 @@ The open hardware reset path runs the pinned RT1051 `SystemInit` before
 loading this bridge, so ITCM use and the XIP instruction path no longer rely
 solely on incidental ROM state. The bridge itself does not require D-cache.
 
+## Stock-launcher compatibility preparation
+
+The first hardware bridge reached the factory engine but produced only the
+pedal's dry hardware bypass. A complete launcher trace then showed that the
+stock launcher performed five operations before copying the selected engine:
+
+1. install its seven-region MPU map and leave caches disabled;
+2. configure eight board pin muxes and pad controls;
+3. establish the 600 MHz ARM/AHB/IPG clock tree;
+4. enable the DWT cycle counter; and
+5. initialize the two boot-switch GPIOs as inputs.
+
+`ncr2_factory_compat_bridge` reconstructs those operations in original C
+source before the audited Metal copy-and-jump. Its pin list and pad values
+match the verified dump exactly:
+
+- GPIO1_IO21 and GPIO3_IO02: boot-switch inputs, `0x70b0`;
+- GPIO2_IO07 and GPIO2_IO08: GPIO controls, `0xd0b0`;
+- GPIO2_IO30, GPIO2_IO31, and GPIO2_IO11: GPIO controls, `0x70b0`; and
+- GPIO1_IO26: GPIO control, `0xf0b0`.
+
+The factory DCD already enables SYS PLL at `0x400d8030` before configuring
+SEMC/SDRAM. The compatibility bridge therefore recreates the factory ARM PLL
+and clock-root settings but intentionally does not restart SYS PLL while it
+is executing from SDRAM.
+
+The first compatibility diagnostic also exposed an independent handoff bug:
+the bridge kept the factory XIP source in caller-saved register `r1` across
+the trial-confirmation and compatibility-preparation calls. Those calls were
+allowed to overwrite `r1`, so the subsequent ITCM loop copied from an
+arbitrary address. The bridge now reloads `0x600c0000` immediately before
+the copy. The post-link checker disassembles `Reset_Handler` and rejects a
+bridge without that post-call reload.
+
+`ncr2_factory_compat_diagnostic` adds a reversible, short pulse of the four
+candidate indicator GPIOs before restoring their prior direction/output
+state and launching Metal. It is intended only as an A/B Slot-B bring-up
+image.
+
 The bridge contains no NUX code, tables, strings, or binary fragments. A full
 private test image is assembled locally from the user's verified dump, and
 the guarded packer proves that the factory compatibility region is
@@ -61,6 +100,24 @@ metadata sector, or if the expected factory-state reference set changes.
 cmake --build build/open --target ncr2_factory_bridge
 python3 tools/check_factory_bridge.py \
   build/open/ncr2_factory_bridge.elf
+```
+
+With a pinned MCUX SDK workspace configured, build the hardware-compatibility
+variants with:
+
+```sh
+cmake --build build/open-hardware-boot \
+  --target ncr2_factory_compat_bridge \
+           ncr2_factory_compat_diagnostic
+python3 tools/check_factory_bridge.py \
+  build/open-hardware-boot/ncr2_factory_compat_diagnostic.elf
+python3 tools/open_image.py pack-slot \
+  --application \
+    build/open-hardware-boot/ncr2_factory_compat_diagnostic.bin \
+  --version 0.1.2 \
+  --build-number 3 \
+  --output \
+    build/open-hardware-boot/ncr2-factory-compat-diagnostic-0.1.2.slot
 ```
 
 Use `ncr2_factory_bridge.bin` as the `--application` input to
