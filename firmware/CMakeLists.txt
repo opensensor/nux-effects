@@ -84,11 +84,13 @@ add_executable(
     ncr2_bootloader
     bootloader/src/startup.S
     bootloader/src/boot_controller.c
+    bootloader/src/boot_handoff.c
     bootloader/src/boot_journal.c
     bootloader/src/boot_lifecycle.c
     bootloader/src/boot_recovery_request.c
     bootloader/src/bootloader.c
     bootloader/src/boot_state.c
+    bootloader/src/boot_trial.c
     bootloader/src/crc32.c
     bootloader/src/recovery_engine.c
     bootloader/src/recovery_protocol.c
@@ -116,6 +118,7 @@ add_executable(
     app/src/startup.S
     app/src/main.c
     bootloader/src/boot_recovery_request.c
+    bootloader/src/boot_trial.c
     platform/ncr2/src/ncr2_boot_request.c
 )
 target_include_directories(
@@ -275,6 +278,7 @@ if(NCR2_BUILD_MCUX_FLEXSPI_ADAPTER)
         ncr2_flexspi_link_probe
         EXCLUDE_FROM_ALL
         platform/ncr2/flexspi/ncr2_flexspi_nor.c
+        platform/ncr2/src/ncr2_freestanding.c
         platform/ncr2/src/ncr2_nor.c
         ${NCR2_FLEXSPI_VENDOR_SOURCE}
     )
@@ -345,6 +349,7 @@ if(NCR2_BUILD_MCUX_BOARD_ADAPTER)
         ncr2_mcux_board_adapter
         OBJECT
         platform/ncr2/board/ncr2_board.c
+        platform/ncr2/board/ncr2_watchdog.c
     )
     target_include_directories(
         ncr2_mcux_board_adapter
@@ -362,6 +367,7 @@ if(NCR2_BUILD_MCUX_BOARD_ADAPTER)
             ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
             ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
             ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/wdog01
             ${NCR2_MCUX_SDK_ROOT}/core/components/lists
             ${NCR2_MCUX_SDK_ROOT}/core/components/osa
             ${NCR2_MCUX_SDK_ROOT}/middleware/usb/include
@@ -397,20 +403,25 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
         NCR2_BOARD_VENDOR_SOURCES
         ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers/fsl_clock.c
         ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio/fsl_gpio.c
+        ${NCR2_MCUX_SDK_ROOT}/core/drivers/wdog01/fsl_wdog.c
     )
     add_executable(
         ncr2_hardware_link_probe
         EXCLUDE_FROM_ALL
         bootloader/src/boot_journal.c
+        bootloader/src/boot_handoff.c
         bootloader/src/boot_recovery_request.c
         bootloader/src/boot_state.c
+        bootloader/src/boot_trial.c
         bootloader/src/crc32.c
         bootloader/src/recovery_engine.c
         bootloader/src/recovery_protocol.c
         bootloader/src/recovery_storage.c
         bootloader/src/sha256.c
         platform/ncr2/board/ncr2_board.c
+        platform/ncr2/board/ncr2_watchdog.c
         platform/ncr2/flexspi/ncr2_flexspi_nor.c
+        platform/ncr2/src/ncr2_freestanding.c
         platform/ncr2/src/ncr2_nor.c
         platform/ncr2/usb/recovery_usb.c
         platform/ncr2/usb/recovery_usb_descriptor.c
@@ -437,6 +448,7 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
             ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
             ${NCR2_MCUX_SDK_ROOT}/core/drivers/flexspi
             ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/wdog01
             ${NCR2_MCUX_SDK_ROOT}/core/components/lists
             ${NCR2_MCUX_SDK_ROOT}/core/components/osa
             ${NCR2_USB_MIDDLEWARE}/include
@@ -490,6 +502,10 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
             -Wl,--undefined=ncr2_board_usb_clock_init
             -Wl,--undefined=ncr2_board_usb_irq_enable
             -Wl,--undefined=ncr2_board_warm_reset
+            -Wl,--undefined=ncr2_board_watchdog_start_trial
+            -Wl,--undefined=ncr2_board_watchdog_refresh
+            -Wl,--undefined=ncr2_board_watchdog_reset_status
+            -Wl,--undefined=boot_handoff_prepare
             -Wl,--undefined=ncr2_board_make_recovery_request
             -Wl,--undefined=ncr2_board_recovery_requested
             -Wl,--undefined=ncr2_recovery_usb_start

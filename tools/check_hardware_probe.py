@@ -12,12 +12,16 @@ from pathlib import Path
 
 REQUIRED_SYMBOLS = {
     "USB_OTG1_IRQHandler",
+    "boot_handoff_prepare",
     "ncr2_board_make_recovery_request",
     "ncr2_board_recovery_input_init",
     "ncr2_board_recovery_requested",
     "ncr2_board_usb_clock_init",
     "ncr2_board_usb_irq_enable",
     "ncr2_board_warm_reset",
+    "ncr2_board_watchdog_refresh",
+    "ncr2_board_watchdog_reset_status",
+    "ncr2_board_watchdog_start_trial",
     "ncr2_flexspi_nor_init",
     "ncr2_recovery_usb_start",
 }

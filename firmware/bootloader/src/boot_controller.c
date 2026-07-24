@@ -18,6 +18,8 @@ static void result_default(boot_controller_result_t *result)
     result->reason = BOOT_CONTROLLER_REASON_INVALID_ARGUMENT;
     result->selected_slot = BOOT_SLOT_NONE;
     result->primary_slot = BOOT_SLOT_NONE;
+    result->confirmation_status =
+        BOOT_CONTROLLER_CONFIRMATION_NONE;
 }
 
 static uint16_t load_state_without_trial(
@@ -55,6 +57,9 @@ void boot_controller_run(
     boot_controller_result_t *result)
 {
     uint8_t selected_slot;
+    uint8_t confirmation_slot = BOOT_SLOT_NONE;
+    uint32_t confirmation_sequence = UINT32_C(0);
+    int confirmation_available = 0;
 
     if (result == NULL) {
         return;
@@ -66,6 +71,14 @@ void boot_controller_run(
         return;
     }
 
+    if (services->consume_confirmation != NULL) {
+        confirmation_available =
+            services->consume_confirmation(
+                services->context,
+                &confirmation_slot,
+                &confirmation_sequence) != 0;
+    }
+
     if (services->recovery_requested != NULL &&
         services->recovery_requested(services->context) != 0) {
         /*
@@ -75,7 +88,40 @@ void boot_controller_run(
         (void)load_state_without_trial(services, result);
         result->reason =
             BOOT_CONTROLLER_REASON_FORCED_RECOVERY;
+        if (confirmation_available) {
+            result->confirmation_status =
+                BOOT_CONTROLLER_CONFIRMATION_IGNORED_FOR_RECOVERY;
+        }
         return;
+    }
+
+    if (confirmation_available) {
+        result->journal_status =
+            load_state_without_trial(services, result);
+        if (result->journal_status != BOOT_JOURNAL_OK) {
+            result->reason =
+                BOOT_CONTROLLER_REASON_JOURNAL_ERROR;
+            return;
+        }
+        if (result->state.pending_slot == confirmation_slot &&
+            result->state.sequence == confirmation_sequence) {
+            result->journal_status =
+                boot_lifecycle_confirm(
+                    services->journal,
+                    services->metadata_address,
+                    confirmation_slot,
+                    &result->state);
+            if (result->journal_status != BOOT_LIFECYCLE_OK) {
+                result->reason =
+                    BOOT_CONTROLLER_REASON_JOURNAL_ERROR;
+                return;
+            }
+            result->confirmation_status =
+                BOOT_CONTROLLER_CONFIRMATION_ACCEPTED;
+        } else {
+            result->confirmation_status =
+                BOOT_CONTROLLER_CONFIRMATION_STALE;
+        }
     }
 
     result->journal_status =

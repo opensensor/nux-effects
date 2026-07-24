@@ -23,6 +23,7 @@ class BoardSupportSafetyTests(unittest.TestCase):
             ),
         )
         self.assertNotIn("ncr2_board.c", boot_sources)
+        self.assertNotIn("ncr2_watchdog.c", boot_sources)
         self.assertIn("ncr2_hardware_link_probe", cmake)
         self.assertIn("NCR2_OPEN_USB_VID=0", cmake)
         self.assertIn("NCR2_OPEN_USB_PID=0", cmake)
@@ -72,6 +73,52 @@ class BoardSupportSafetyTests(unittest.TestCase):
             layout,
         )
         self.assertNotIn("NCR2_DTCM_USABLE_START", layout)
+
+    def test_trial_mailbox_and_watchdog_are_guarded(self):
+        layout = (
+            ROOT
+            / "firmware"
+            / "platform"
+            / "ncr2"
+            / "include"
+            / "ncr2_flash_layout.h"
+        ).read_text()
+        watchdog = (
+            ROOT
+            / "firmware"
+            / "platform"
+            / "ncr2"
+            / "board"
+            / "ncr2_watchdog.c"
+        ).read_text()
+        header = (
+            ROOT
+            / "firmware"
+            / "platform"
+            / "ncr2"
+            / "board"
+            / "ncr2_watchdog.h"
+        ).read_text()
+
+        self.assertIn(
+            "#define NCR2_BOOT_TRIAL_MAILBOX_ADDRESS "
+            "UINT32_C(0x400F8028)",
+            layout,
+        )
+        self.assertIn(
+            "#define NCR2_BOOT_TRIAL_MAILBOX_SIZE "
+            "UINT32_C(0x00000010)",
+            layout,
+        )
+        self.assertIn(
+            "NCR2_TRIAL_WATCHDOG_TIMEOUT_VALUE "
+            "UINT16_C(0x000F)",
+            header,
+        )
+        self.assertIn("config.enableTimeOutAssert = false", watchdog)
+        self.assertIn("config.enableInterrupt = false", watchdog)
+        self.assertIn("config.workMode.enableDebug = false", watchdog)
+        self.assertIn("WDOG1", watchdog)
 
     def test_usb_irq_has_a_vector_but_defaults_to_weak_handler(self):
         startup = (

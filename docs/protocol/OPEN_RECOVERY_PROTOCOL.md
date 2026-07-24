@@ -111,6 +111,13 @@ The bootloader then records each trial before executing the pending slot.
 The application must explicitly confirm itself after a healthy audio/control
 startup. Exhausted trials roll back to the last confirmed slot.
 
+Confirmation is not an application-side flash write. The bootloader publishes
+the pending slot and exact metadata sequence in retained SRC GPR3–GPR6. Once
+healthy, the application converts that handoff token to a confirmation token
+and warm-resets. The bootloader consumes it, verifies both fields against the
+current pending record, and appends the confirmed record itself. A watchdog
+reset, torn token, stale sequence, or replay cannot confirm an image.
+
 No metadata record is written until `FINALIZE_IMAGE` has independently
 validated the complete inactive slot.
 
@@ -122,9 +129,10 @@ are scanned and the newer valid sequence wins.
 
 Pending images receive exactly three recorded attempts. The trial counter is
 durably appended before each jump. A fourth reset without confirmation
-appends a rollback record and selects the last confirmed image. Hardware
-wiring of these already-tested policies waits on the RAM-resident FlexSPI
-backend.
+appends a rollback record and selects the last confirmed image. The
+host-tested handoff layer can arm the opt-in RT1051 WDOG1 adapter for an
+eight-second trial. Hardware wiring of these already-tested policies waits
+on the RAM-resident FlexSPI backend and target watchdog gate.
 
 ## Host tooling
 

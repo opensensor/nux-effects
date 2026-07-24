@@ -31,6 +31,14 @@
 #define NCR2_DTCM_END UINT32_C(0x20020000)
 
 /*
+ * SRC GPR3 through GPR6. The bootloader publishes the pending slot and
+ * journal sequence here. A healthy application turns the handoff token
+ * into a one-shot confirmation before warm reset.
+ */
+#define NCR2_BOOT_TRIAL_MAILBOX_ADDRESS UINT32_C(0x400F8028)
+#define NCR2_BOOT_TRIAL_MAILBOX_SIZE UINT32_C(0x00000010)
+
+/*
  * SRC GPR8 and GPR9. The RT1051 reference SDK documents SRC GPR values
  * as retained during reset. They form the magic/inverse warm-reset
  * recovery request and are unrelated to flash layout despite living in

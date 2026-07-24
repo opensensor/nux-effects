@@ -71,4 +71,6 @@ entry. They remain disconnected from the boot path behind the no-flash
 hardware gate.
 The boot decision controller itself is now integrated with a deliberately
 read-only backend and host-tested for forced recovery, pending trials,
-immediate rejection, rollback, and emergency slot fallback.
+sequence-bound application confirmation, immediate rejection, rollback, and
+emergency slot fallback. An opt-in eight-second WDOG1 trial adapter compiles
+in the nonbootable hardware probe but is not wired into the default image.

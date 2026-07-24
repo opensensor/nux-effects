@@ -23,13 +23,17 @@ Implemented:
   on journal or image failure;
 - a fixed, one-shot software-recovery mailbox in retained SRC GPR8/GPR9,
   plus an application-facing arm API;
+- a replay- and torn-write-safe pending-trial mailbox in SRC GPR3–GPR6,
+  binding application health confirmation to one slot and journal sequence;
+- a host-tested handoff service that starts an injected trial watchdog and
+  publishes the retained confirmation challenge;
 - vector, stack, size, board, and load-address checks;
 - range-confined 64-byte open recovery packet format;
 - host-tested inactive-slot update transaction and retry behavior;
 - `pedalctl.py` host packet/client implementation;
 - a compile-checked RT1051 EHCI/HID adapter for 64-byte `NXFX` reports;
 - an opt-in RT1051 board adapter for the recovered boot inputs, USB1
-  clocks/PHY/IRQ, and warm reset;
+  clocks/PHY/IRQ, an eight-second WDOG1 trial, and warm reset;
 - a host-tested NOR mutation policy and compile/link-checked RT1051
   FlexSPI adapter with an ITCM-only command call graph;
 - a combined, deliberately nonbootable hardware link probe joining the board,
@@ -46,7 +50,7 @@ Not implemented:
 - physical validation of FlexSPI erase/program on a sacrificial sector;
 - hardware-backed journal mutation and USB recovery entry from
   `bootloader_main`;
-- watchdog confirmation and rollback;
+- target validation and default-boot wiring of watchdog confirmation;
 - cache/MPU setup;
 - source SEMC initialization;
 - GPIO diagnostics or audio.

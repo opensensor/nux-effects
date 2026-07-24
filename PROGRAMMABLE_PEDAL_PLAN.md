@@ -244,6 +244,14 @@ factory-engine zero-wear prototype has validated it with `NVIC_SystemReset`
 on this pedal. Live switching among Delay, Reverb, Modulation, and Drive
 remains application RAM state and does not use this mailbox or write flash.
 
+Pending-image confirmation uses a separate retained mailbox in SRC
+GPR3–GPR6. The bootloader publishes the pending slot and exact journal
+sequence before handoff. A healthy application converts that token and
+warm-resets; only the bootloader writes the confirmed metadata record.
+Watchdog resets, stale sequences, partial tokens, and replays cannot confirm
+an image. The policy and eight-second RT1051 WDOG1 adapter pass host and
+compile/link gates but remain disconnected from the default offline image.
+
 ## 6. Unified pedal application
 
 ### Execution model
@@ -679,7 +687,8 @@ implementation session should:
    path.
 5. Validate erase/program/readback on one sacrificial application sector.
 6. Power-cut the two-sector journal at every mutation boundary.
-7. Add watchdog-backed application confirmation and hard-fault rollback.
+7. Wire the compile-checked WDOG1 adapter into the RAM/debug trial path and
+   target-test timeout, confirmation, hard-fault, and three-attempt rollback.
 8. Map the remaining audio codec, SAI, eDMA, ADC, GPIO, mute, and bypass
    details before implementing the four-mode source DSP application.
 

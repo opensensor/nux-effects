@@ -30,6 +30,9 @@ typedef struct mock_context {
     uint32_t load_count[2];
     int forced;
     int fail_reads;
+    int confirmation_available;
+    uint8_t confirmation_slot;
+    uint32_t confirmation_sequence;
 } mock_context_t;
 
 static int resolve(mock_context_t *context,
@@ -96,6 +99,20 @@ static int recovery_requested(void *opaque)
     return context->forced;
 }
 
+static int consume_confirmation(
+    void *opaque,
+    uint8_t *slot,
+    uint32_t *sequence)
+{
+    mock_context_t *context = (mock_context_t *)opaque;
+
+    if (!context->confirmation_available) return 0;
+    context->confirmation_available = 0;
+    *slot = context->confirmation_slot;
+    *sequence = context->confirmation_sequence;
+    return 1;
+}
+
 static uint16_t load_slot(void *opaque, uint8_t slot)
 {
     mock_context_t *context = (mock_context_t *)opaque;
@@ -154,6 +171,7 @@ int main(void)
     services.metadata_address = MOCK_BASE;
     services.context = &context;
     services.recovery_requested = recovery_requested;
+    services.consume_confirmation = consume_confirmation;
     services.load_slot = load_slot;
 
     /* A normal confirmed boot loads A without mutating state. */
@@ -169,9 +187,14 @@ int main(void)
     reset_context(&context);
     if (seed_state(&journal, &state, 1) != 0) return 3;
     context.forced = 1;
+    context.confirmation_available = 1;
+    context.confirmation_slot = BOOT_SLOT_B;
+    context.confirmation_sequence = state.sequence;
     boot_controller_run(&services, &result);
     if (result.action != BOOT_CONTROLLER_RECOVERY ||
         result.reason != BOOT_CONTROLLER_REASON_FORCED_RECOVERY ||
+        result.confirmation_status !=
+            BOOT_CONTROLLER_CONFIRMATION_IGNORED_FOR_RECOVERY ||
         result.state.pending_slot != BOOT_SLOT_B ||
         result.state.trial_count != 0 ||
         context.load_count[BOOT_SLOT_A] != 0 ||
@@ -190,6 +213,38 @@ int main(void)
     if (boot_journal_load(
             &journal, MOCK_BASE, &state, &location) !=
         BOOT_JOURNAL_OK || state.trial_count != 1) return 8;
+
+    /* A matching healthy-app token confirms that exact journal trial. */
+    context.confirmation_available = 1;
+    context.confirmation_slot = BOOT_SLOT_B;
+    context.confirmation_sequence = result.state.sequence;
+    boot_controller_run(&services, &result);
+    if (result.action != BOOT_CONTROLLER_HANDOFF ||
+        result.selected_slot != BOOT_SLOT_B ||
+        result.confirmation_status !=
+            BOOT_CONTROLLER_CONFIRMATION_ACCEPTED ||
+        result.state.confirmed_slot != BOOT_SLOT_B ||
+        result.state.pending_slot != BOOT_SLOT_NONE) return 24;
+    if (boot_journal_load(
+            &journal, MOCK_BASE, &state, &location) !=
+        BOOT_JOURNAL_OK ||
+        state.confirmed_slot != BOOT_SLOT_B ||
+        state.pending_slot != BOOT_SLOT_NONE) return 25;
+
+    /* A stale sequence cannot confirm a different trial. */
+    reset_context(&context);
+    if (seed_state(&journal, &state, 1) != 0) return 26;
+    boot_controller_run(&services, &result);
+    context.confirmation_available = 1;
+    context.confirmation_slot = BOOT_SLOT_B;
+    context.confirmation_sequence = result.state.sequence - 1U;
+    boot_controller_run(&services, &result);
+    if (result.action != BOOT_CONTROLLER_HANDOFF ||
+        result.selected_slot != BOOT_SLOT_B ||
+        result.confirmation_status !=
+            BOOT_CONTROLLER_CONFIRMATION_STALE ||
+        result.state.pending_slot != BOOT_SLOT_B ||
+        result.state.trial_count != 2U) return 27;
 
     /* A bad pending image is rejected durably before fallback. */
     reset_context(&context);

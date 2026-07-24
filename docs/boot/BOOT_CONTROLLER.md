@@ -7,22 +7,58 @@ injected services, so the complete decision tree runs in host tests.
 
 ## Decision order
 
-1. Consume a physical or one-shot software recovery request.
-2. If recovery was requested, load metadata for reporting only. Do not
+1. Consume and clear any retained trial-confirmation token.
+2. Consume a physical or one-shot software recovery request.
+3. If recovery was requested, ignore the confirmation for this boot and load
+   metadata for reporting only. Do not
    increment a pending-image trial counter.
-3. Load the newest valid two-sector journal record.
-4. Roll back an expired pending image, or append its next trial record before
+4. Accept a confirmation only when its slot and sequence match the exact
+   pending journal record.
+5. Load the newest valid two-sector journal record.
+6. Roll back an expired pending image, or append its next trial record before
    attempting to boot it.
-5. Validate, copy, and verify the selected slot.
-6. If a pending slot is invalid, durably reject it before loading the
+7. Validate, copy, and verify the selected slot.
+8. If a pending slot is invalid, durably reject it before loading the
    confirmed slot.
-7. If a confirmed slot is invalid, try the other slot once as an emergency
+9. If a confirmed slot is invalid, try the other slot once as an emergency
    fallback.
-8. Enter recovery if the journal cannot be trusted or neither slot loads.
+10. Enter recovery if the journal cannot be trusted or neither slot loads.
 
 The slot callback performs the manifest, vector, payload SHA-256, SDRAM copy,
 and copied-image SHA-256 checks. A handoff decision therefore means the
 destination image has already passed both source and destination validation.
+
+## Pending-image confirmation
+
+SRC GPR3 through GPR6 (`0x400f8028–0x400f8037`) hold a four-word
+token/inverse and sequence/inverse mailbox. Before handing off to a pending
+application, the bootloader publishes the selected slot and the exact
+journal sequence. A watchdog reset leaves that token in the `handoff` state,
+which cannot confirm anything and is consumed on the next boot.
+
+After the application has passed its SDRAM, audio-DMA, and control-health
+gates, it can call:
+
+```c
+#include "ncr2_boot_request.h"
+
+if (ncr2_boot_confirm_healthy() == 0) {
+    /* Request the board's validated warm-reset path. */
+}
+```
+
+This atomically changes the retained token from `handoff` to `confirmation`;
+it does not write flash. On the next warm reset, the bootloader accepts it
+only if both the slot and journal sequence still match the pending record.
+The bootloader—not the application—then appends the durable confirmed state.
+Stale, replayed, partial, and mismatched tokens are cleared without
+confirming a slot.
+
+`boot_handoff_prepare` exposes watchdog start as an injected service, so the
+whole policy runs in host tests. The opt-in RT1051 adapter configures WDOG1
+for an eight-second pending trial, continues in wait/stop, pauses under a
+debugger, and does not assert the external watchdog output. The default
+offline boot image deliberately supplies no watchdog callback.
 
 ## One-shot recovery mailbox
 
@@ -57,7 +93,7 @@ mutating NOR.
 
 The compile-checked FlexSPI, USB, and board adapters remain disconnected from
 the default boot image. The board adapter configures only the two recovered
-early-boot input pads, USB1 clocks/PHY/IRQ, and warm reset. The combined
+early-boot input pads, USB1 clocks/PHY/IRQ, WDOG1, and warm reset. The combined
 nonbootable link probe proves all three adapters resolve together, but
 pending-trial persistence and USB recovery become hardware-approved only
 after the documented target gates pass. Until then, a controller recovery

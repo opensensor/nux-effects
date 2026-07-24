@@ -2,7 +2,9 @@
 #include <stdint.h>
 
 #include "boot_controller.h"
+#include "boot_handoff.h"
 #include "boot_recovery_request.h"
+#include "boot_trial.h"
 #include "crc32.h"
 #include "ncr2_flash_layout.h"
 #include "pedal_image.h"
@@ -21,6 +23,11 @@ enum boot_diagnostic_code {
 
 volatile uint32_t g_boot_diagnostic
     __attribute__((section(".noinit")));
+
+typedef struct boot_runtime_context {
+    boot_recovery_request_t recovery;
+    boot_trial_mailbox_t *trial;
+} boot_runtime_context_t;
 
 static void data_sync_barrier(void)
 {
@@ -209,11 +216,25 @@ static int metadata_program_disabled(
 
 static int recovery_requested(void *context)
 {
-    boot_recovery_request_t *request =
-        (boot_recovery_request_t *)context;
+    boot_runtime_context_t *runtime =
+        (boot_runtime_context_t *)context;
 
-    return boot_recovery_request_consume(request) !=
+    return boot_recovery_request_consume(&runtime->recovery) !=
            BOOT_RECOVERY_REQUEST_NONE;
+}
+
+static int consume_confirmation(
+    void *context,
+    uint8_t *slot,
+    uint32_t *sequence)
+{
+    boot_runtime_context_t *runtime =
+        (boot_runtime_context_t *)context;
+
+    return boot_trial_consume_confirmation(
+               runtime->trial,
+               slot,
+               sequence) == BOOT_TRIAL_OK;
 }
 
 __attribute__((noreturn))
@@ -247,26 +268,38 @@ void bootloader_main(void)
         .erase = metadata_mutation_disabled,
         .program = metadata_program_disabled,
     };
-    boot_recovery_request_t recovery_request = {
-        .mailbox =
-            (boot_recovery_mailbox_t *)(uintptr_t)
-                NCR2_BOOT_MAILBOX_ADDRESS,
-        .physical_context = NULL,
-        .physical_asserted = NULL,
+    boot_runtime_context_t runtime = {
+        .recovery = {
+            .mailbox =
+                (boot_recovery_mailbox_t *)(uintptr_t)
+                    NCR2_BOOT_MAILBOX_ADDRESS,
+            .physical_context = NULL,
+            .physical_asserted = NULL,
+        },
+        .trial =
+            (boot_trial_mailbox_t *)(uintptr_t)
+                NCR2_BOOT_TRIAL_MAILBOX_ADDRESS,
     };
     boot_controller_services_t services = {
         .journal = &journal,
         .metadata_address =
             NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET,
-        .context = &recovery_request,
+        .context = &runtime,
         .recovery_requested = recovery_requested,
+        .consume_confirmation = consume_confirmation,
         .load_slot = load_slot,
     };
     boot_controller_result_t result;
+    boot_handoff_services_t handoff = {
+        .trial_mailbox = runtime.trial,
+        .watchdog_context = NULL,
+        .start_trial_watchdog = NULL,
+    };
 
     g_boot_diagnostic = BOOT_DIAGNOSTIC_RESET;
     boot_controller_run(&services, &result);
     if (result.action == BOOT_CONTROLLER_HANDOFF) {
+        (void)boot_handoff_prepare(&handoff, &result);
         jump_to_application();
     }
 

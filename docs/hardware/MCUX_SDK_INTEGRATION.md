@@ -108,6 +108,8 @@ recovery proof:
 - initializes EHCI PHY0 with the trims used by the pinned reference;
 - enables `USB_OTG1_IRQn` at priority 3 and dispatches it to the open USB
   adapter; and
+- configures WDOG1 for an eight-second pending-image trial, without interrupt
+  or external timeout assertion and with pause-under-debug behavior; and
 - requests warm reset with `NVIC_SystemReset`.
 
 It contains no LED, bypass, mute, audio, or other GPIO output writes. The
@@ -193,7 +195,8 @@ pedal.
 ## Combined hardware integration probe
 
 Enable all three adapters to compile and link the complete board, USB,
-recovery engine, boot journal, NOR policy, and FlexSPI dependency graph:
+recovery engine, boot journal, trial-confirmation/watchdog handoff, NOR
+policy, and FlexSPI dependency graph:
 
 ```sh
 cmake -S firmware -B build/open-hardware-probe -G Ninja \

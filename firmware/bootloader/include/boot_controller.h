@@ -26,11 +26,22 @@ enum boot_controller_slot_status {
     BOOT_CONTROLLER_SLOT_COPY_FAILED = 2,
 };
 
+enum boot_controller_confirmation_status {
+    BOOT_CONTROLLER_CONFIRMATION_NONE = 0,
+    BOOT_CONTROLLER_CONFIRMATION_ACCEPTED = 1,
+    BOOT_CONTROLLER_CONFIRMATION_STALE = 2,
+    BOOT_CONTROLLER_CONFIRMATION_IGNORED_FOR_RECOVERY = 3,
+};
+
 typedef struct boot_controller_services {
     const boot_journal_backend_t *journal;
     uint32_t metadata_address;
     void *context;
     int (*recovery_requested)(void *context);
+    int (*consume_confirmation)(
+        void *context,
+        uint8_t *slot,
+        uint32_t *sequence);
     uint16_t (*load_slot)(void *context, uint8_t slot);
 } boot_controller_services_t;
 
@@ -42,6 +53,7 @@ typedef struct boot_controller_result {
     uint8_t reason;
     uint8_t selected_slot;
     uint8_t primary_slot;
+    uint8_t confirmation_status;
 } boot_controller_result_t;
 
 void boot_controller_run(
