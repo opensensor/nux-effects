@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "board_id": "NCR2",
+  "flash_size": 8388608,
+  "xip_base": 1610612736,
+  "erased_byte": 255,
+  "regions": [
+    {
+      "name": "bootloader",
+      "offset": 0,
+      "size": 131072,
+      "policy": "programmer_only"
+    },
+    {
+      "name": "boot_metadata",
+      "offset": 131072,
+      "size": 65536,
+      "policy": "bootloader_only"
+    },
+    {
+      "name": "factory_compatibility",
+      "offset": 196608,
+      "size": 3997696,
+      "policy": "preserve"
+    },
+    {
+      "name": "application_a",
+      "offset": 4194304,
+      "size": 2097152,
+      "policy": "application_slot"
+    },
+    {
+      "name": "application_b",
+      "offset": 6291456,
+      "size": 2097152,
+      "policy": "application_slot"
+    }
+  ],
+  "boot_header": {
+    "offset": 0,
+    "size": 8192,
+    "source": "verified_stock_dump"
+  },
+  "application_manifest_size": 4096,
+  "application_load_address": 2147483648,
+  "known_stock_sha256": "4263ef41c0745f6e8c00be13b52391b6b04a5f51779b12d0e191abf6888e7a14"
+}
+

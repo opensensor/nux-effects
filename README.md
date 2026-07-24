@@ -15,6 +15,8 @@ The long-term target is a source-level programmable pedal with:
 The current architecture and phased bring-up plan are in
 [PROGRAMMABLE_PEDAL_PLAN.md](PROGRAMMABLE_PEDAL_PLAN.md). The recovered stock
 HID updater protocol is documented in [DFU_PROTOCOL.md](DFU_PROTOCOL.md).
+The offline source boot chain and build instructions are in
+[firmware/README.md](firmware/README.md).
 
 ## Current hardware facts
 
@@ -57,4 +59,3 @@ proving the shared Core Deluxe platform and the USB deployment path.
 
 Development is now moving to an independent bootloader, board-support
 package, deterministic audio engine, and original/open DSP implementations.
-

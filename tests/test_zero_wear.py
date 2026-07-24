@@ -22,6 +22,8 @@ spec.loader.exec_module(build_zero_wear)
 class ZeroWearImageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if not (ROOT / "dump1.bin").exists():
+            raise unittest.SkipTest("private stock dump is not present")
         cls.stock = (ROOT / "dump1.bin").read_bytes()
 
     def test_patch_changes_only_vector_and_monitor_cave(self) -> None:

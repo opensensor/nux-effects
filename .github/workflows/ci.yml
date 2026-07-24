@@ -1,0 +1,36 @@
+name: firmware-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host-and-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-arm-none-eabi ninja-build
+
+      - name: Validate layout and host tools
+        run: |
+          python3 tools/open_image.py validate-layout
+          python3 -m unittest discover -s tests -v
+
+      - name: Build firmware
+        run: |
+          cmake -S firmware -B build/open -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/open
+          arm-none-eabi-size \
+            build/open/ncr2_bootloader.elf \
+            build/open/ncr2_app.elf
+

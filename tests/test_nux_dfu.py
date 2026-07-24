@@ -43,6 +43,13 @@ class BinaProtocolTests(unittest.TestCase):
         self.assertEqual(first_record, bina[:RECORD_SIZE])
 
     def test_generated_artifacts_match_verified_stock(self) -> None:
+        required = (
+            ROOT / "dump1.bin",
+            ROOT / "eng3-slot1.bina",
+            ROOT / "restore-stock-slots.bina",
+        )
+        if not all(path.exists() for path in required):
+            self.skipTest("private device artifacts are not present")
         stock = (ROOT / "dump1.bin").read_bytes()
         self.assertEqual(hashlib.sha256(stock).hexdigest(), STOCK_SHA256)
         self.assertEqual(stock[0x20000], 1)
@@ -75,6 +82,8 @@ class BinaProtocolTests(unittest.TestCase):
         )
 
     def test_engine_replacement_is_limited_to_selected_slot(self) -> None:
+        if not (ROOT / "dump1.bin").exists():
+            self.skipTest("private stock dump is not present")
         stock = (ROOT / "dump1.bin").read_bytes()
         image = replace_engine_slot(
             stock, selected_slot=1, source_slot=3
