@@ -29,6 +29,9 @@ launcher ABI is documented in
 [docs/hardware/FACTORY_SLOT_APP.md](docs/hardware/FACTORY_SLOT_APP.md).
 The executed factory SAI/eDMA format and buffer topology are documented in
 [docs/hardware/FACTORY_AUDIO.md](docs/hardware/FACTORY_AUDIO.md).
+The recovered GPIO startup levels and remaining analog-control ambiguity are
+documented in
+[docs/hardware/FACTORY_BOARD_CONTROL.md](docs/hardware/FACTORY_BOARD_CONTROL.md).
 
 ## Current hardware facts
 

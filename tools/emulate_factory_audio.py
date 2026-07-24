@@ -87,6 +87,14 @@ WATCH_RANGES = (
     WatchRange(0x400EC000, 0x400ED000, "DMAMUX"),
 )
 
+GPIO_WATCH_RANGES = (
+    WatchRange(0x401B8000, 0x401B8100, "GPIO1"),
+    WatchRange(0x401BC000, 0x401BC100, "GPIO2"),
+    WatchRange(0x401C0000, 0x401C0100, "GPIO3"),
+    WatchRange(0x401C4000, 0x401C4100, "GPIO4"),
+    WatchRange(0x400C0000, 0x400C0100, "GPIO5"),
+)
+
 SAI_REGISTER_OFFSETS = {
     0x08: "TCSR",
     0x0C: "TCR1",
@@ -295,8 +303,13 @@ def _dump_sai1_pins(emulator: Uc) -> None:
     )
 
 
-def _watch_name(address: int) -> str | None:
-    for region in WATCH_RANGES:
+def _watch_name(address: int, trace_gpio: bool) -> str | None:
+    ranges = (
+        WATCH_RANGES + GPIO_WATCH_RANGES
+        if trace_gpio
+        else WATCH_RANGES
+    )
+    for region in ranges:
         if region.start <= address < region.end:
             return region.name
     return None
@@ -379,6 +392,7 @@ def emulate(
     dump: bytes,
     engine: bytes,
     instruction_limit: int,
+    trace_gpio: bool,
 ) -> int:
     emulator = _build_emulator(dump, engine)
     counts: Counter[int] = Counter()
@@ -387,6 +401,7 @@ def emulate(
     writes: list[tuple[int, int, str, int, int, int]] = []
     instruction_count = 0
     audio_init_complete = False
+    gpio_alias_update = False
 
     def rmw(
         address: int,
@@ -486,7 +501,25 @@ def emulate(
         value: int,
         _user_data: object,
     ) -> None:
-        name = _watch_name(address)
+        nonlocal gpio_alias_update
+        if not gpio_alias_update:
+            for region in GPIO_WATCH_RANGES:
+                offset = address - region.start
+                if offset not in (0x84, 0x88, 0x8C):
+                    continue
+                gpio_alias_update = True
+                data = _read_u32(current, region.start)
+                if offset == 0x84:
+                    data |= value
+                elif offset == 0x88:
+                    data &= ~value
+                else:
+                    data ^= value
+                _write_u32(current, region.start, data)
+                gpio_alias_update = False
+                break
+
+        name = _watch_name(address, trace_gpio)
         if name is None:
             return
         mask = (1 << (size * 8)) - 1
@@ -579,6 +612,13 @@ def emulate(
         "factory_audio_state=" +
         bytes(emulator.mem_read(0x20009524, 0x200)).hex()
     )
+    print("gpio_state:")
+    for region in GPIO_WATCH_RANGES:
+        print(
+            f"  {region.name}: "
+            f"DR={_read_u32(emulator, region.start):#010x} "
+            f"GDIR={_read_u32(emulator, region.start + 4):#010x}"
+        )
 
     if error is not None:
         print(f"emulation stopped with {error}", file=sys.stderr)
@@ -605,13 +645,23 @@ def main() -> int:
         type=int,
         default=15_000_000,
     )
+    parser.add_argument(
+        "--trace-gpio",
+        action="store_true",
+        help="print every GPIO write in addition to the final pin state",
+    )
     arguments = parser.parse_args()
 
     try:
         dump, engine = _load_inputs(arguments.dump, arguments.engine)
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    return emulate(dump, engine, arguments.instruction_limit)
+    return emulate(
+        dump,
+        engine,
+        arguments.instruction_limit,
+        arguments.trace_gpio,
+    )
 
 
 if __name__ == "__main__":

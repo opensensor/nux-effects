@@ -184,3 +184,5 @@ must also reproduce or conservatively preserve:
 The current source buffers and TCDs are in DTCM, so data-cache coherency is
 not involved. External IRQ0 and the eDMA acknowledgement/copy path are
 validated by the post-link checker and source emulator.
+The current GPIO evidence and the two remaining pin/polarity questions are
+tracked in [FACTORY_BOARD_CONTROL.md](FACTORY_BOARD_CONTROL.md).

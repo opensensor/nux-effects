@@ -43,6 +43,24 @@ class FactoryAudioEvidenceTests(unittest.TestCase):
             hardware_map,
         )
 
+    def test_gpio_alias_model_and_board_evidence_are_recorded(self):
+        emulator = (
+            ROOT / "tools" / "emulate_factory_audio.py"
+        ).read_text()
+        board = (
+            ROOT
+            / "docs"
+            / "hardware"
+            / "FACTORY_BOARD_CONTROL.md"
+        ).read_text()
+
+        self.assertIn("GPIO_WATCH_RANGES", emulator)
+        self.assertIn("--trace-gpio", emulator)
+        self.assertIn("offset not in (0x84, 0x88, 0x8C)", emulator)
+        self.assertIn("GPIO1: DR=0x85003000", board)
+        self.assertIn("GPIO2: DR=0x0400000c", board)
+        self.assertIn("require a schematic", board)
+
 
 if __name__ == "__main__":
     unittest.main()
