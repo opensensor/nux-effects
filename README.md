@@ -27,13 +27,15 @@ Metal engine is documented in
 The source-built ITCM application target that matches the recovered factory
 launcher ABI is documented in
 [docs/hardware/FACTORY_SLOT_APP.md](docs/hardware/FACTORY_SLOT_APP.md).
+The executed factory SAI/eDMA format and buffer topology are documented in
+[docs/hardware/FACTORY_AUDIO.md](docs/hardware/FACTORY_AUDIO.md).
 
 ## Current hardware facts
 
 - NXP MIMXRT1051DVL6B Cortex-M7
 - 8 MiB external FlexSPI NOR
 - 32 MiB ESMT M12L2561616A SDRAM on SEMC
-- SAI2/SAI3 with eDMA for the stock audio path
+- SAI1 with eDMA for the executed stock audio path
 - USB MIDI in normal mode
 - 64-byte vendor HID reports in recovery mode
 

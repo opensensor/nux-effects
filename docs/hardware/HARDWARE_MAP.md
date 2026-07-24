@@ -19,10 +19,11 @@ evidence reaches `confirmed`.
 
 ## Confirmed stock peripheral use
 
-These peripherals occur in the stock code and SDK driver strings. Their exact
-pad assignments are not yet all confirmed:
+These peripherals occur in the stock code and SDK driver strings. Execution
+tracing distinguishes the active audio path from unused shared SDK code:
 
-- SAI2 and SAI3
+- SAI1 (active factory audio path)
+- SAI2 and SAI3 (shared SDK code present; not executed by ENG3 bring-up)
 - eDMA and DMAMUX
 - ADC1 and ADC2
 - ADC_ETC
@@ -53,22 +54,29 @@ recovery condition sampled at startup. It configures both pads as inputs with
 100 kOhm pull-ups and hysteresis, and contains no GPIO output writes. This
 does not promote either pin to a runtime footswitch mapping.
 
-## Audio interface measurements required
+## Audio interface
+
+Offline execution of the verified factory Metal engine confirms:
+
+- SAI1 at a nominal 48 kHz;
+- four 32-bit words per frame;
+- transmitter-owned MCLK/BCLK/frame sync;
+- receiver synchronized to the transmitter;
+- eDMA channel 0 for RX and channel 16 for TX;
+- two 128-byte buffers per direction, or eight frames per ping/pong half.
+
+The exact register, pin, clock, and TCD values are in
+[FACTORY_AUDIO.md](FACTORY_AUDIO.md).
+
+Remaining physical measurements:
 
 1. Identify every converter/codec IC and strap resistor.
-2. Trace SAI2/SAI3 signals from MCU pads to converter pins.
-3. Capture MCLK, BCLK, LRCLK, TX data, and RX data during stock operation.
-4. Record:
-   - master/slave direction;
-   - sample rate;
-   - MCLK frequency;
-   - BCLK-to-LRCLK ratio;
-   - word and slot width;
-   - I2S/left-justified/DSP framing;
-   - channel polarity/order.
-5. Recover the matching CCM, IOMUXC, SAI, DMAMUX, and eDMA register values
-   statically and reconcile them with the capture.
-6. Observe power-on/off mute timing into an amplifier or dummy load.
+2. Trace the confirmed SAI1 pads to converter pins.
+3. Capture MCLK, BCLK, frame sync, TX data, and RX data during stock
+   operation to reconcile nominal and measured rates.
+4. Determine the meaning and order of all four serial slots.
+5. Observe power-on/off mute and bypass timing into an amplifier or dummy
+   load.
 
 ## Debug and recovery measurements required
 
