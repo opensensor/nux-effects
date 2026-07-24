@@ -39,6 +39,15 @@ Reset_Handler:
     dsb
     isb
 
+#if defined(NCR2_HARDWARE_STARTUP)
+    /*
+     * Match the stock launcher's early core setup using the pinned RT1051
+     * SystemInit implementation: FPU access, watchdog shutdown, SysTick
+     * shutdown, and I-cache enable. This call uses no initialized C data.
+     */
+    bl SystemInit
+#endif
+
     ldr r0, =__ramfunc_load
     ldr r1, =__ramfunc_start
     ldr r2, =__ramfunc_end

@@ -135,6 +135,13 @@ class HardwareBootloaderSafetyTests(unittest.TestCase):
 
         self.assertIn("0xE000ED08", startup)
         self.assertIn("g_boot_vectors", startup)
+        self.assertIn("bl SystemInit", startup)
+        self.assertIn(
+            "core/devices/MIMXRT1051/system_MIMXRT1051.c",
+            (
+                ROOT / "firmware" / "CMakeLists.txt"
+            ).read_text(),
+        )
         self.assertIn("reset_installs_vtor", checker)
 
 

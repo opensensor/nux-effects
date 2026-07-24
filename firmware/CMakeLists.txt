@@ -476,6 +476,7 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
    NCR2_BUILD_MCUX_BOARD_ADAPTER)
     set(
         NCR2_BOARD_VENDOR_SOURCES
+        ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/system_MIMXRT1051.c
         ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers/fsl_clock.c
         ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio/fsl_gpio.c
         ${NCR2_MCUX_SDK_ROOT}/core/drivers/wdog01/fsl_wdog.c
@@ -662,6 +663,7 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
                 FSL_OSA_BM_TIMER_CONFIG=0
                 SDK_OS_BAREMETAL
                 DATA_SECTION_IS_CACHEABLE=0
+                NCR2_HARDWARE_STARTUP=1
                 NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
                 NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
                 NCR2_HARDWARE_RECOVERY_WRITE_ENABLE=${NCR2_HARDWARE_WRITE_VALUE}

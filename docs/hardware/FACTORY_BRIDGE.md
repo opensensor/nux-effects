@@ -14,6 +14,10 @@ The factory reset handler then installs VTOR and MSP itself, matching the
 stock launcher's behavior. A vector mismatch enters a quiet `WFI` fault loop
 before ITCM is modified.
 
+The open hardware reset path runs the pinned RT1051 `SystemInit` before
+loading this bridge, so ITCM use and the XIP instruction path no longer rely
+solely on incidental ROM state. The bridge itself does not require D-cache.
+
 The bridge contains no NUX code, tables, strings, or binary fragments. A full
 private test image is assembled locally from the user's verified dump, and
 the guarded packer proves that the factory compatibility region is

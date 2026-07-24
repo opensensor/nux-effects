@@ -83,6 +83,12 @@ alignment, and ITCM-only flash-busy call graph. These are offline structural
 gates, not evidence that the image is safe to flash. Physical read-only USB
 bring-up, sacrificial-sector NOR testing, and watchdog rollback validation
 remain outstanding.
+
+The hardware reset path now also calls the pinned RT1051 `SystemInit` before
+copying ITCM routines or entering C services. This source-controls FPU access,
+watchdog/SysTick cleanup, and instruction-cache enable instead of relying on
+unknown power-on state. A full application MPU/data-cache policy remains a
+later audio-BSP gate.
 The application now has an allocation-free extensible effect registry,
 caller-sized processing chains, validated program/bank catalogs, and a
 generic program selector. Its default five-second navigation gesture

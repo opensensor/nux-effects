@@ -20,6 +20,7 @@ USB_OTG1_VECTOR_INDEX = 16 + 113
 
 REQUIRED_SYMBOLS = {
     "Reset_Handler",
+    "SystemInit",
     "USB_OTG1_IRQHandler",
     "bootloader_main",
     "bootloader_run",
@@ -174,6 +175,8 @@ def reset_installs_vtor(
         raise SystemExit("Reset_Handler has no VTOR store")
     if "dsb" not in disassembly or "isb" not in disassembly:
         raise SystemExit("Reset_Handler lacks VTOR barriers")
+    if not re.search(r"\bbl(?:\.w)?\s+.*<SystemInit>", disassembly):
+        raise SystemExit("Reset_Handler does not call RT1051 SystemInit")
 
     text_start, text_end = section_bounds(
         readelf_output, ".text"

@@ -123,6 +123,13 @@ The open bootloader vector table now contains the USB OTG1 vector at RT1051
 external IRQ 113. The handler remains a weak default unless the opt-in board
 adapter is explicitly linked.
 
+The hardware boot target also links the pinned
+`system_MIMXRT1051.c`. Reset installs VTOR and then calls `SystemInit` before
+copying `.ramfunc`, `.data`, or entering board code. This matches the stock
+startup's essential early behavior: FPU access, watchdog disable, SysTick
+disable, and instruction-cache initialization. It does not enable D-cache;
+the future audio application still needs an explicit MPU/data-cache policy.
+
 ## Clock, MPU, and memory requirements
 
 The stock FCFB/DCD already initializes FlexSPI and the 32 MiB SEMC SDRAM
@@ -232,8 +239,9 @@ proves source completeness only; it is not a flashable image.
 
 `ncr2_hardware_bootloader` is an `EXCLUDE_FROM_ALL` target that joins the
 same integration graph to the real reset/vector path. Startup installs
-`g_boot_vectors` into `SCB->VTOR`, executes `DSB`/`ISB`, copies `.ramfunc`,
-and then enters the shared boot controller. The hardware services provide:
+`g_boot_vectors` into `SCB->VTOR`, executes `DSB`/`ISB`, runs the pinned
+RT1051 `SystemInit`, copies `.ramfunc`, and then enters the shared boot
+controller. The hardware services provide:
 
 - exact early-recovery GPIO sampling;
 - a W25Q64 JEDEC probe;

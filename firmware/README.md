@@ -42,6 +42,7 @@ Implemented:
 - an opt-in hardware bootloader with explicit VTOR installation, complete
   RT1051 vectors, the W25Q64 probe, the board/USB/FlexSPI adapters, the
   recovery engine, the boot journal, and the watchdog handoff;
+- pinned RT1051 `SystemInit` execution before ITCM copy or hardware services;
 - separate compile-time gates for USB enumeration and physical NOR mutation,
   both disabled by default;
 - a post-link hardware checker for vectors, VTOR, protected flash size,
@@ -68,7 +69,7 @@ Not implemented:
 - physical validation of FlexSPI erase/program on a sacrificial sector;
 - target validation of open USB recovery, hardware-backed journal mutation,
   and watchdog confirmation/rollback;
-- cache/MPU setup;
+- source-controlled MPU/data-cache policy for the full open application;
 - source SEMC initialization;
 - GPIO diagnostics or audio.
 
