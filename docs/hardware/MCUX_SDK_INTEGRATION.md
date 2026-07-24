@@ -130,6 +130,43 @@ The protocol never gives this backend an absolute host-provided address.
 `recovery_resolve_range` has already reduced every operation to the inactive
 application partition before the backend is called.
 
+The current source implements this as two layers:
+
+- `ncr2_nor.c` is the hardware-independent policy layer. It permits mutation
+  only in boot metadata or application A/B, requires 4 KiB-aligned erases,
+  splits writes at 256-byte page boundaries, rejects attempted zero-to-one
+  programming, and verifies every mutation through readback.
+- `ncr2_flexspi_nor.c` is an opt-in MCUX adapter for the exact RT1051. It
+  installs private single-pad W25Q commands in LUT sequences 11–15, refuses
+  any JEDEC ID other than `EF 40 17`, disables interrupts for the complete
+  mutation, waits for WIP to clear, resets the AHB buffers, and invalidates
+  Cortex-M7 caches before verification.
+
+The low-level functions and the exact MCUX blocking call graph are linked
+into ITCM by `ncr2_bootloader.ld`. Startup copies that section from its flash
+load image before C initialization. The linker asserts the MCUX entry points
+are in ITCM; the post-link checker also rejects any direct or indirect branch
+from `.ramfunc` back into XIP.
+
+Compile and link-check this path without producing a hardware-approved image:
+
+```sh
+cmake -S firmware -B build/open-flexspi -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_MCUX_FLEXSPI_ADAPTER=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/open-flexspi \
+  --target ncr2_mcux_flexspi_adapter ncr2_flexspi_link_probe
+python3 tools/check_ramfunc.py \
+  build/open-flexspi/ncr2_flexspi_link_probe.elf
+```
+
+This remains an offline gate. The adapter is not wired to `bootloader_main`
+or the USB recovery engine, and no erase/program command has been issued to
+the physical pedal.
+
 ## Next hardware gates
 
 Before any full-chip open image is approved:

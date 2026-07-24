@@ -11,6 +11,11 @@ option(
     "Compile-check the RT1051 open recovery USB adapter"
     OFF
 )
+option(
+    NCR2_BUILD_MCUX_FLEXSPI_ADAPTER
+    "Compile-check the RT1051 RAM-resident FlexSPI NOR adapter"
+    OFF
+)
 set(
     NCR2_MCUX_SDK_ROOT
     ""
@@ -80,7 +85,9 @@ add_executable(
     bootloader/src/crc32.c
     bootloader/src/recovery_engine.c
     bootloader/src/recovery_protocol.c
+    bootloader/src/recovery_storage.c
     bootloader/src/sha256.c
+    platform/ncr2/src/ncr2_nor.c
 )
 target_include_directories(
     ncr2_bootloader
@@ -93,6 +100,9 @@ ncr2_firmware_target(
     ncr2_bootloader
     ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/ncr2_bootloader.ld
 )
+# The ITCM load image has a low VMA and a flash LMA. GNU ld's default
+# page-aligned ELF headers cannot represent that split in this small image.
+target_link_options(ncr2_bootloader PRIVATE -Wl,-n)
 
 add_executable(
     ncr2_app
@@ -188,5 +198,126 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER)
     set_source_files_properties(
         ${NCR2_USB_VENDOR_SOURCES}
         PROPERTIES COMPILE_OPTIONS "-w"
+    )
+endif()
+
+if(NCR2_BUILD_MCUX_FLEXSPI_ADAPTER)
+    if(NOT EXISTS
+       "${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/MIMXRT1051.h")
+        message(
+            FATAL_ERROR
+            "NCR2_MCUX_SDK_ROOT is not a pinned MCUX SDK workspace"
+        )
+    endif()
+
+    set(
+        NCR2_FLEXSPI_VENDOR_SOURCE
+        ${NCR2_MCUX_SDK_ROOT}/core/drivers/flexspi/fsl_flexspi.c
+    )
+    add_library(
+        ncr2_mcux_flexspi_adapter
+        OBJECT
+        platform/ncr2/flexspi/ncr2_flexspi_nor.c
+        ${NCR2_FLEXSPI_VENDOR_SOURCE}
+    )
+    target_include_directories(
+        ncr2_mcux_flexspi_adapter
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/flexspi
+    )
+    target_include_directories(
+        ncr2_mcux_flexspi_adapter
+        SYSTEM PRIVATE
+            ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/flexspi
+    )
+    target_compile_definitions(
+        ncr2_mcux_flexspi_adapter
+        PRIVATE
+            CPU_MIMXRT1051DVL6B
+    )
+    target_compile_options(
+        ncr2_mcux_flexspi_adapter
+        PRIVATE
+            ${NCR2_CPU_FLAGS}
+            -ffreestanding
+            -fno-builtin
+            -fdata-sections
+            -ffunction-sections
+            -fno-common
+            -Wall
+            -Wextra
+            -Werror
+            -Wconversion
+            -Wshadow
+            -Wundef
+    )
+    set_source_files_properties(
+        ${NCR2_FLEXSPI_VENDOR_SOURCE}
+        PROPERTIES COMPILE_OPTIONS "-w"
+    )
+
+    add_executable(
+        ncr2_flexspi_link_probe
+        EXCLUDE_FROM_ALL
+        platform/ncr2/flexspi/ncr2_flexspi_nor.c
+        platform/ncr2/src/ncr2_nor.c
+        ${NCR2_FLEXSPI_VENDOR_SOURCE}
+    )
+    target_include_directories(
+        ncr2_flexspi_link_probe
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/flexspi
+    )
+    target_include_directories(
+        ncr2_flexspi_link_probe
+        SYSTEM PRIVATE
+            ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/flexspi
+    )
+    target_compile_definitions(
+        ncr2_flexspi_link_probe
+        PRIVATE
+            CPU_MIMXRT1051DVL6B
+    )
+    target_compile_options(
+        ncr2_flexspi_link_probe
+        PRIVATE
+            ${NCR2_CPU_FLAGS}
+            -ffreestanding
+            -fno-builtin
+            -fdata-sections
+            -ffunction-sections
+            -fno-common
+            -Wall
+            -Wextra
+            -Werror
+            -Wconversion
+            -Wshadow
+            -Wundef
+    )
+    target_link_options(
+        ncr2_flexspi_link_probe
+        PRIVATE
+            ${NCR2_CPU_FLAGS}
+            -nostdlib
+            -Wl,-n
+            -Wl,--gc-sections
+            -Wl,--build-id=none
+            -Wl,-e,ncr2_flexspi_nor_init
+            -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/ncr2_flexspi_link_probe.map
+            -T${CMAKE_CURRENT_SOURCE_DIR}/bootloader/ncr2_bootloader.ld
+    )
+    set_target_properties(
+        ncr2_flexspi_link_probe
+        PROPERTIES SUFFIX ".elf"
     )
 endif()

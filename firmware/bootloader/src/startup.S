@@ -21,29 +21,39 @@ g_boot_vectors:
 .type Reset_Handler, %function
 .thumb_func
 Reset_Handler:
+    ldr r0, =__ramfunc_load
+    ldr r1, =__ramfunc_start
+    ldr r2, =__ramfunc_end
+0:
+    cmp r1, r2
+    bcs 1f
+    ldr r3, [r0], #4
+    str r3, [r1], #4
+    b 0b
+1:
     ldr r0, =__data_load
     ldr r1, =__data_start
     ldr r2, =__data_end
-1:
+2:
     cmp r1, r2
-    bcs 2f
+    bcs 3f
     ldr r3, [r0], #4
     str r3, [r1], #4
-    b 1b
-2:
+    b 2b
+3:
     ldr r1, =__bss_start
     ldr r2, =__bss_end
     movs r3, #0
-3:
-    cmp r1, r2
-    bcs 4f
-    str r3, [r1], #4
-    b 3b
 4:
-    bl bootloader_main
+    cmp r1, r2
+    bcs 5f
+    str r3, [r1], #4
+    b 4b
 5:
+    bl bootloader_main
+6:
     wfi
-    b 5b
+    b 6b
 .size Reset_Handler, . - Reset_Handler
 
 .section .text.Default_Handler, "ax", %progbits
@@ -54,4 +64,3 @@ Reset_Handler:
 Default_Handler:
     b .
 .size Default_Handler, . - Default_Handler
-

@@ -46,6 +46,41 @@ class UsbRecoverySafetyTests(unittest.TestCase):
         self.assertIn("NCR2_OPEN_USB_PID", descriptor)
         self.assertNotIn("0x9527", descriptor.lower())
 
+    def test_flexspi_adapter_is_opt_in_and_device_guarded(self):
+        cmake = (ROOT / "firmware" / "CMakeLists.txt").read_text()
+        self.assertRegex(
+            cmake,
+            r"option\(\s*NCR2_BUILD_MCUX_FLEXSPI_ADAPTER\s+"
+            r'"[^"]+"\s+OFF\s*\)',
+        )
+        source = (
+            ROOT
+            / "firmware"
+            / "platform"
+            / "ncr2"
+            / "flexspi"
+            / "ncr2_flexspi_nor.c"
+        ).read_text()
+        self.assertIn('section(".ramfunc.ncr2_flexspi")', source)
+        self.assertIn("NCR2_W25Q64_MANUFACTURER UINT8_C(0xEF)", source)
+        self.assertIn("NCR2_W25Q64_MEMORY_TYPE UINT8_C(0x40)", source)
+        self.assertIn("NCR2_W25Q64_CAPACITY UINT8_C(0x17)", source)
+        self.assertIn("mutation_allowed(address, length)", source)
+
+        linker = (
+            ROOT
+            / "firmware"
+            / "bootloader"
+            / "ncr2_bootloader.ld"
+        ).read_text()
+        for symbol in (
+            "FLEXSPI_ReadBlocking",
+            "FLEXSPI_WriteBlocking",
+            "FLEXSPI_TransferBlocking",
+            "FLEXSPI_UpdateLUT",
+        ):
+            self.assertIn(f"DEFINED({symbol}) ?", linker)
+
 
 if __name__ == "__main__":
     unittest.main()

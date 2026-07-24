@@ -3,6 +3,7 @@ ENTRY(Reset_Handler)
 MEMORY
 {
     FLASH (rx)  : ORIGIN = 0x60002000, LENGTH = 0x0001E000
+    ITCM  (rwx) : ORIGIN = 0x00000000, LENGTH = 0x00020000
     DTCM  (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00020000
 }
 
@@ -12,6 +13,27 @@ SECTIONS
     {
         KEEP(*(.isr_vector))
     } > FLASH
+
+    /*
+     * Any call graph that can execute while the XIP NOR is busy belongs
+     * here. This section must precede the catch-all .text rule. The
+     * explicit MCUX sections prevent an accidental call back into flash
+     * from the RAM-tagged W25Q64 primitives.
+     */
+    .ramfunc :
+    {
+        . = ALIGN(8);
+        __ramfunc_start = .;
+        *(.ramfunc*)
+        *fsl_flexspi.c.obj(.text.FLEXSPI_CheckAndClearError)
+        *fsl_flexspi.c.obj(.text.FLEXSPI_ReadBlocking)
+        *fsl_flexspi.c.obj(.text.FLEXSPI_WriteBlocking)
+        *fsl_flexspi.c.obj(.text.FLEXSPI_TransferBlocking)
+        *fsl_flexspi.c.obj(.text.FLEXSPI_UpdateLUT)
+        . = ALIGN(8);
+        __ramfunc_end = .;
+    } > ITCM AT > FLASH
+    __ramfunc_load = LOADADDR(.ramfunc);
 
     .text :
     {
@@ -70,4 +92,22 @@ SECTIONS
 
     ASSERT(__flash_image_end <= ORIGIN(FLASH) + LENGTH(FLASH),
            "bootloader exceeds protected flash region")
+    ASSERT(__ramfunc_end <= ORIGIN(ITCM) + LENGTH(ITCM),
+           "RAM-resident flash call graph exceeds ITCM")
+    ASSERT(DEFINED(FLEXSPI_ReadBlocking) ?
+           (FLEXSPI_ReadBlocking >= ORIGIN(ITCM) &&
+            FLEXSPI_ReadBlocking < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,
+           "FLEXSPI_ReadBlocking must execute from ITCM")
+    ASSERT(DEFINED(FLEXSPI_WriteBlocking) ?
+           (FLEXSPI_WriteBlocking >= ORIGIN(ITCM) &&
+            FLEXSPI_WriteBlocking < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,
+           "FLEXSPI_WriteBlocking must execute from ITCM")
+    ASSERT(DEFINED(FLEXSPI_TransferBlocking) ?
+           (FLEXSPI_TransferBlocking >= ORIGIN(ITCM) &&
+            FLEXSPI_TransferBlocking < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,
+           "FLEXSPI_TransferBlocking must execute from ITCM")
+    ASSERT(DEFINED(FLEXSPI_UpdateLUT) ?
+           (FLEXSPI_UpdateLUT >= ORIGIN(ITCM) &&
+            FLEXSPI_UpdateLUT < ORIGIN(ITCM) + LENGTH(ITCM)) : 1,
+           "FLEXSPI_UpdateLUT must execute from ITCM")
 }
