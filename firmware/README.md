@@ -57,6 +57,9 @@ Implemented:
   power-loss-safe boot journal;
 - a guarded full-chip packer that starts from the verified factory dump;
 - exact preservation checks for the stock boot header and factory region.
+- an opt-in, copyright-neutral factory Metal bridge that validates the
+  preserved vectors, copies the engine to ITCM, and reproduces the stock
+  handoff without embedding factory bytes.
 
 Not implemented:
 
@@ -206,6 +209,24 @@ python3 tools/open_image.py extract-boot \
 The JSON register-write description is retained as hardware documentation.
 Binary fragments remain ignored build artifacts.
 
+## Build the factory Metal compatibility bridge
+
+The bridge is excluded from the default build and contains no factory
+firmware:
+
+```sh
+cmake --build build/open --target ncr2_factory_bridge
+python3 tools/check_factory_bridge.py \
+  build/open/ncr2_factory_bridge.elf
+arm-none-eabi-size build/open/ncr2_factory_bridge.elf
+```
+
+The expected payload is 776 bytes. It executes from SDRAM, validates the
+preserved Metal vectors at `0x600c0000`, copies `0x1e000` bytes to ITCM, and
+branches to the audited factory reset vector. See
+[FACTORY_BRIDGE.md](../docs/hardware/FACTORY_BRIDGE.md) for the cross-reference
+audit and corrected metadata layout.
+
 ## Build a guarded offline full image
 
 ```sh
@@ -226,7 +247,7 @@ The resulting full image is still not approved for hardware. The report must
 show:
 
 - the first `0x2000` bytes preserved;
-- `0x30000–0x3fffff` preserved;
+- factory state and content at `0x20000–0x3effff` preserved;
 - application A valid;
 - application B erased; and
 - no changed partition outside bootloader, metadata, and application slots.

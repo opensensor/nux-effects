@@ -105,8 +105,8 @@ currently empty upper half of the NOR:
 | Flash offset | Size | Purpose |
 |---:|---:|---|
 | `0x000000–0x01ffff` | 128 KiB | Open FCFB/DCD/IVT and recovery bootloader |
-| `0x020000–0x02ffff` | 64 KiB | Redundant boot metadata and update journal |
-| `0x030000–0x3fffff` | 3.8125 MiB | Preserved factory compatibility/archive region |
+| `0x020000–0x3effff` | 3.8125 MiB | Preserved factory engines, state, and archive region |
+| `0x3f0000–0x3fffff` | 64 KiB | Redundant open boot metadata and update journal |
 | `0x400000–0x5fffff` | 2 MiB | Open application slot A |
 | `0x600000–0x7fffff` | 2 MiB | Open application slot B |
 
@@ -117,11 +117,13 @@ restore all four original engine slots, then overlay:
 - initial boot metadata; and
 - the first open application in slot A.
 
-This preserves the original coefficient, identity, and preset regions during
-bring-up. A bootloader menu can retain a factory-compatibility loader as a
-diagnostic fallback. Once the open firmware is mature, a later layout may
-reclaim the factory region, but that is not necessary for the first usable
-release.
+This preserves the original coefficient, identity, preset, and engine-state
+regions during bring-up. In particular, the factory engines actively use
+sectors `0x2d000` and `0x2e000`; open metadata therefore lives in the erased,
+reference-audited sector at `0x3f0000`. A bootloader menu can retain a
+factory-compatibility loader as a diagnostic fallback. Once the open
+firmware is mature, a later layout may reclaim the factory region, but that
+is not necessary for the first usable release.
 
 ### Application-slot format
 

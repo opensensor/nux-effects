@@ -196,6 +196,16 @@ ncr2_firmware_target(
     ${CMAKE_CURRENT_SOURCE_DIR}/app/ncr2_app.ld
 )
 
+add_executable(
+    ncr2_factory_bridge
+    EXCLUDE_FROM_ALL
+    factory_bridge/src/startup.S
+)
+ncr2_firmware_target(
+    ncr2_factory_bridge
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/ncr2_app.ld
+)
+
 if(NCR2_BUILD_MCUX_USB_ADAPTER)
     if(NOT EXISTS
        "${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/MIMXRT1051.h")

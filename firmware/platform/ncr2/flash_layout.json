@@ -12,16 +12,16 @@
       "policy": "programmer_only"
     },
     {
-      "name": "boot_metadata",
-      "offset": 131072,
-      "size": 65536,
-      "policy": "bootloader_only"
-    },
-    {
       "name": "factory_compatibility",
-      "offset": 196608,
+      "offset": 131072,
       "size": 3997696,
       "policy": "preserve"
+    },
+    {
+      "name": "boot_metadata",
+      "offset": 4128768,
+      "size": 65536,
+      "policy": "bootloader_only"
     },
     {
       "name": "application_a",
@@ -45,4 +45,3 @@
   "application_load_address": 2147483648,
   "known_stock_sha256": "4263ef41c0745f6e8c00be13b52391b6b04a5f51779b12d0e191abf6888e7a14"
 }
-

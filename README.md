@@ -21,6 +21,9 @@ The independent open recovery wire format is documented in
 [docs/protocol/OPEN_RECOVERY_PROTOCOL.md](docs/protocol/OPEN_RECOVERY_PROTOCOL.md).
 The allocation-free application effect ABI and program model are documented
 in [docs/app/EFFECT_RUNTIME.md](docs/app/EFFECT_RUNTIME.md).
+The copyright-neutral diagnostic path that chain-loads the preserved factory
+Metal engine is documented in
+[docs/hardware/FACTORY_BRIDGE.md](docs/hardware/FACTORY_BRIDGE.md).
 
 ## Current hardware facts
 
@@ -87,3 +90,11 @@ operates on runtime catalog sizes and has no four-effect assumption.
 The first source catalog contains six host-tested starter programs assembled
 from Gain and Soft Clip descriptors; it is test scaffolding pending audio
 hardware bring-up.
+
+For first-image continuity, an opt-in 776-byte original-source bridge now
+validates and loads the preserved factory Metal engine from the compatibility
+region. Dependency analysis also caught and corrected a flash-layout
+collision: every factory engine uses state sectors at `0x2d000/0x2e000`, so
+the open journal now lives at the erased, reference-audited `0x3f0000`
+sector. The bridge and a full private overlay pass offline validation, but no
+generated image is approved for hardware.

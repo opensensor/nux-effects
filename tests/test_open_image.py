@@ -56,6 +56,22 @@ class LayoutTests(unittest.TestCase):
             self.layout.region("bootloader").size,
         )
         self.assertEqual(
+            value("NCR2_FACTORY_OFFSET"),
+            self.layout.region("factory_compatibility").offset,
+        )
+        self.assertEqual(
+            value("NCR2_FACTORY_SIZE"),
+            self.layout.region("factory_compatibility").size,
+        )
+        self.assertEqual(
+            value("NCR2_BOOT_METADATA_OFFSET"),
+            self.layout.region("boot_metadata").offset,
+        )
+        self.assertEqual(
+            value("NCR2_BOOT_METADATA_SIZE"),
+            self.layout.region("boot_metadata").size,
+        )
+        self.assertEqual(
             value("NCR2_APPLICATION_A_OFFSET"),
             self.layout.region("application_a").offset,
         )
@@ -211,6 +227,26 @@ class FullImageTests(unittest.TestCase):
             inspected["slots"]["application_b"]["state"], "erased"
         )
 
+    def test_factory_engine_state_sectors_are_preserved(self):
+        stock = bytearray(self.stock)
+        stock[0x2D000 : 0x2D100] = bytes(range(256))
+        stock[0x2E000 : 0x2E100] = bytes(reversed(range(256)))
+        image, _report = open_image.build_full_image(
+            bytes(stock),
+            self.bootloader,
+            self.application,
+            layout=self.layout,
+            semantic_version=0,
+            build_number=1,
+            verify_stock=False,
+        )
+        self.assertEqual(
+            image[0x2D000 : 0x2F000],
+            bytes(stock[0x2D000 : 0x2F000]),
+        )
+        metadata = self.layout.region("boot_metadata")
+        self.assertEqual(metadata.offset, 0x3F0000)
+
     def test_bad_boot_vector_is_rejected(self):
         broken = bytearray(self.bootloader)
         struct.pack_into("<I", broken, 4, 0x60003000)
@@ -246,6 +282,16 @@ class StockExtractionTests(unittest.TestCase):
                 for command in config["dcd"]["commands"]
             ),
             125,
+        )
+        stock = dump.read_bytes()
+        metadata = layout.region("boot_metadata")
+        self.assertEqual(
+            stock[metadata.offset : metadata.end],
+            bytes([0xFF]) * metadata.size,
+        )
+        self.assertNotEqual(
+            stock[0x2E000 : 0x2F000],
+            bytes([0xFF]) * 0x1000,
         )
 
 
