@@ -1,0 +1,44 @@
+# Proprietary/device-derived firmware and updater artifacts.
+dump*.bin
+*.bina
+nux-metal-mode.bin
+nux-core-deluxe-preservation-*.tar.zst
+nux-core-deluxe-preservation-*.tar.zst.sha256
+SHA256SUMS
+
+# Preserve the artifact inventory, but never commit its binary contents.
+artifacts/*
+!artifacts/README.md
+
+# Firmware build products.
+build/
+build-*/
+zero_wear/build/
+zero_wear/build-*/
+*.elf
+*.o
+*.map
+*.disasm.txt
+
+# Downloaded vendor packages and executable installers.
+*.zip
+*.dmg
+*.exe
+*.app/
+
+# Python and test caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Ghidra projects and local analysis state.
+*.gpr
+*.rep/
+.ghidra/
+
+# Editor and OS files.
+.idea/
+.vscode/
+*~
+.DS_Store
+
