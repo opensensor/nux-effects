@@ -39,7 +39,7 @@ SECTIONS
         *(.iplt)
         *(.igot.plt)
         *(.rel.iplt)
-        . = ALIGN(4);
+        . = ALIGN(8);
     } > SDRAM
 
     .data :
@@ -47,7 +47,12 @@ SECTIONS
         . = ALIGN(4);
         __data_start = .;
         *(.data*)
-        . = ALIGN(4);
+        /*
+         * The bootloader embeds this binary in an eight-byte-aligned
+         * read-only section. Keep the binary itself aligned so linker
+         * padding cannot become an unverified suffix of the embedded blob.
+         */
+        . = ALIGN(8);
         __data_end = .;
     } > DTCM AT > SDRAM
     __data_load = LOADADDR(.data);

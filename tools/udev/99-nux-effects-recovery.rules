@@ -1,0 +1,11 @@
+# OpenSensor NUX Effects recovery firmware (USB and hidraw views).
+SUBSYSTEM=="usb", ATTR{idVendor}=="9527", ATTR{idProduct}=="c157", MODE="0666"
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="9527", ATTRS{idProduct}=="c157", MODE="0666"
+
+# Immutable NXP i.MX RT1051 serial downloader ROM.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1fc9", ATTR{idProduct}=="0130", MODE="0666"
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="0130", MODE="0666"
+
+# NXP RAM-resident flashloader used by tools/ncr2_rom_recover.py.
+SUBSYSTEM=="usb", ATTR{idVendor}=="15a2", ATTR{idProduct}=="0073", MODE="0666"
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="0073", MODE="0666"

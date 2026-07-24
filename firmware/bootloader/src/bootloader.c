@@ -254,6 +254,9 @@ void bootloader_run(
     boot_controller_run(&services, &result);
     if (result.action == BOOT_CONTROLLER_HANDOFF) {
         (void)boot_handoff_prepare(&handoff, &result);
+        if (platform->sync_application_memory != NULL) {
+            platform->sync_application_memory();
+        }
         jump_to_application();
     }
 

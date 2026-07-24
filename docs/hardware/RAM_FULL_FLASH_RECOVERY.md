@@ -58,13 +58,25 @@ python3 tools/check_hardware_bootloader.py \
 
 Install the resulting bootloader as part of a guarded full-chip image once.
 Thereafter, entering physical recovery launches the embedded RAM personality.
-Confirm capability `0x20` before issuing `restore-full`. A legacy XIP
+Confirm capabilities `0x20` (RAM full-flash) and `0x40` (progressive erase)
+before issuing `restore-full`. The host refuses the original silent,
+monolithic full-chip erase implementation. A legacy XIP
 recovery personality reports only `0x1f` and rejects the destructive begin
 command.
 
+Recovery `bcdDevice=0.05` also performs all NOR verification reads through a
+private bounded FlexSPI IP-command sequence. Physical testing of v0.03 found
+that using the XIP/AHB aperture for preflight and post-mutation verification
+could wedge USB service even when only two inactive-slot sectors were
+covered. The IP read path keeps recovery independent of the XIP window after
+the bootloader copies it to SDRAM.
+
 ## Failure model
 
-The whole chip is erased before address zero is rewritten. Until
+The whole chip is erased in 128 ordered 64 KiB operations before address zero
+is rewritten. Each operation returns the next erase offset, so the host can
+show progress and retry an ACK-lost command without repeating the mutation.
+Until
 `FINALIZE_FULL_FLASH` succeeds:
 
 - do not remove pedal power;

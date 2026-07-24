@@ -42,6 +42,20 @@ option(
     OFF
 )
 option(
+    NCR2_BUILD_HARDWARE_AUDIO_APP
+    "Build the source-native SDRAM SAI/eDMA hardware application"
+    OFF
+)
+set(
+    NCR2_HARDWARE_APP_PROFILE "audio"
+    CACHE STRING
+    "Post-link contract for the hardware application: audio or bringup"
+)
+set_property(
+    CACHE NCR2_HARDWARE_APP_PROFILE
+    PROPERTY STRINGS audio bringup
+)
+option(
     NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH
     "Enable the recovered unapproved SAI1/eDMA factory-slot passthrough"
     OFF
@@ -378,6 +392,93 @@ if(NCR2_BUILD_FACTORY_SLOT_APP)
         ${CMAKE_CURRENT_SOURCE_DIR}/factory_slot/ncr2_factory_slot.ld
     )
     target_link_options(ncr2_factory_slot_app PRIVATE -Wl,-n)
+endif()
+
+if(NCR2_BUILD_HARDWARE_AUDIO_APP)
+    if(NOT EXISTS
+       "${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/system_MIMXRT1051.c")
+        message(
+            FATAL_ERROR
+            "NCR2_BUILD_HARDWARE_AUDIO_APP requires the pinned MCUX SDK workspace"
+        )
+    endif()
+
+    set(
+        NCR2_HARDWARE_APP_SYSTEM_SOURCE
+        ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/system_MIMXRT1051.c
+    )
+    set(
+        NCR2_HARDWARE_APP_CLOCK_SOURCE
+        ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers/fsl_clock.c
+    )
+    add_executable(
+        ncr2_hardware_audio_app
+        EXCLUDE_FROM_ALL
+        hardware_app/src/startup.S
+        hardware_app/src/main.c
+        bootloader/src/boot_trial.c
+        factory_slot/src/audio_passthrough.c
+        factory_slot/src/board_control.c
+        ${NCR2_HARDWARE_APP_SYSTEM_SOURCE}
+        ${NCR2_HARDWARE_APP_CLOCK_SOURCE}
+    )
+    target_include_directories(
+        ncr2_hardware_audio_app
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/factory_slot/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
+    )
+    target_include_directories(
+        ncr2_hardware_audio_app
+        SYSTEM PRIVATE
+            ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+    )
+    target_compile_definitions(
+        ncr2_hardware_audio_app
+        PRIVATE
+            CPU_MIMXRT1051DVL6B
+            NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=1
+            NCR2_FACTORY_SLOT_BOARD_CONTROLS=1
+            # GPIO1_IO24 and GPIO1_IO31 are the bicolour indicator,
+            # confirmed on hardware by the v0.4.8 sweep. They route
+            # nothing, so the active-low effect hypothesis is retired.
+            NCR2_FACTORY_BOARD_EFFECT_ACTIVE_LOW=0
+    )
+    set_source_files_properties(
+        ${NCR2_HARDWARE_APP_SYSTEM_SOURCE}
+        ${NCR2_HARDWARE_APP_CLOCK_SOURCE}
+        PROPERTIES COMPILE_OPTIONS "-w"
+    )
+    ncr2_firmware_target(
+        ncr2_hardware_audio_app
+        ${CMAKE_CURRENT_SOURCE_DIR}/app/ncr2_app.ld
+    )
+    target_link_options(
+        ncr2_hardware_audio_app
+        PRIVATE
+            -Wl,-n
+            -Wl,--undefined=DMA0_DMA16_IRQHandler
+    )
+    # SystemCoreClockUpdate divides 64-bit values, so the freestanding link
+    # needs libgcc's helpers. The post-link audit still proves every
+    # resulting segment lands in RAM.
+    target_link_libraries(ncr2_hardware_audio_app PRIVATE gcc)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_custom_command(
+        TARGET ncr2_hardware_audio_app
+        POST_BUILD
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_hardware_audio_app.py
+            --profile ${NCR2_HARDWARE_APP_PROFILE}
+            $<TARGET_FILE:ncr2_hardware_audio_app>
+            ${CMAKE_CURRENT_BINARY_DIR}/ncr2_hardware_audio_app.bin
+        VERBATIM
+    )
 endif()
 
 if(NCR2_BUILD_MCUX_USB_ADAPTER)

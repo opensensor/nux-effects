@@ -221,6 +221,26 @@ static uint32_t recovery_session_seed(
 }
 #endif
 
+/*
+ * The application payload is copied into SDRAM through the data path while
+ * the bootloader itself executes XIP from flash. Cortex-M7 instruction
+ * fetch does not snoop the D-cache, so dirty lines must be written back and
+ * any stale instruction lines discarded before the handoff. Without this
+ * the core fetches whatever SDRAM held before the copy and faults into the
+ * application's default handler with no outward sign at all.
+ */
+static void sync_application_memory(void)
+{
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+    SCB_CleanInvalidateDCache();
+#endif
+#if defined(__ICACHE_PRESENT) && (__ICACHE_PRESENT == 1U)
+    SCB_InvalidateICache();
+#endif
+    __DSB();
+    __ISB();
+}
+
 static void enter_hardware_recovery(
     void *opaque,
     const boot_controller_result_t *result)
@@ -322,5 +342,7 @@ void bootloader_main(void)
     services.recovery_context = &g_hardware;
     services.enter_recovery =
         enter_hardware_recovery;
+    services.sync_application_memory =
+        sync_application_memory;
     bootloader_run(&services);
 }

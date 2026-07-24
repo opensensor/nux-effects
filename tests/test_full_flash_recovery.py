@@ -63,8 +63,7 @@ static int mock_erase(void *opaque,
 {
     mock_context_t *context = (mock_context_t *)opaque;
     uint8_t *destination;
-    if (address != NCR2_FLASH_XIP_BASE ||
-        length != NCR2_FLASH_SIZE ||
+    if (length != RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE ||
         resolve(address, length, &destination, context) != 0) return -1;
     memset(destination, 0xff, length);
     ++context->erase_calls;
@@ -196,6 +195,10 @@ int main(void)
     if ((info.capabilities & RECOVERY_CAPABILITY_FULL_FLASH_RAM) == 0) {
         return 5;
     }
+    if ((info.capabilities &
+         RECOVERY_CAPABILITY_PROGRESSIVE_FULL_ERASE) == 0) {
+        return 15;
+    }
 
     request(
         &in,
@@ -215,12 +218,41 @@ int main(void)
         RECOVERY_COMMAND_ERASE_FULL_FLASH,
         RECOVERY_FLAG_FULL_FLASH,
         session,
-        sequence++,
-        0,
+        sequence,
+        RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE,
         NULL,
         0);
-    if (run(&engine, &in, &out, RECOVERY_STATUS_OK) != 0) return 7;
-    if (context.erase_calls != 1) return 8;
+    if (run(&engine, &in, &out, RECOVERY_STATUS_WRITE_ORDER) != 0) {
+        return 17;
+    }
+
+    for (uint32_t offset = 0; offset < NCR2_FLASH_SIZE;
+         offset += RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE) {
+        request(
+            &in,
+            RECOVERY_COMMAND_ERASE_FULL_FLASH,
+            RECOVERY_FLAG_FULL_FLASH,
+            session,
+            sequence++,
+            offset,
+            NULL,
+            0);
+        if (run(&engine, &in, &out, RECOVERY_STATUS_OK) != 0) return 7;
+        if (out.offset !=
+            offset + RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE) return 8;
+        if (offset == 0) {
+            uint32_t erase_calls = context.erase_calls;
+            if (run(
+                    &engine,
+                    &in,
+                    &out,
+                    RECOVERY_STATUS_OK) != 0) return 18;
+            if (context.erase_calls != erase_calls) return 19;
+        }
+    }
+    if (context.erase_calls !=
+        NCR2_FLASH_SIZE /
+        RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE) return 16;
 
     for (uint32_t offset = 0; offset < NCR2_FLASH_SIZE;
          offset += RECOVERY_PAYLOAD_SIZE) {

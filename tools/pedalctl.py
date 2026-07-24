@@ -19,6 +19,7 @@ import sys
 import time
 import zlib
 from pathlib import Path
+from collections.abc import Callable
 from typing import Protocol
 
 import open_image
@@ -40,6 +41,8 @@ SLOT_NONE = 0xFF
 FLAG_FULL_FLASH = 0x8000
 FULL_FLASH_UNLOCK = 0x45504957
 CAPABILITY_FULL_FLASH_RAM = 0x20
+CAPABILITY_PROGRESSIVE_FULL_ERASE = 0x40
+FULL_FLASH_ERASE_CHUNK_SIZE = 0x10000
 FULL_FLASH_CONFIRMATION = "WIPE-ALL-8MIB"
 
 COMMANDS = {
@@ -451,16 +454,42 @@ class RecoveryClient:
     def erase(self) -> None:
         self._session_command("erase-slot")
 
-    def erase_full_flash(self) -> None:
-        self._session_command("erase-full-flash")
+    def erase_full_flash(
+        self,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        total = ncr2_rom_recover.FLASH_SIZE
+        for offset in range(0, total, FULL_FLASH_ERASE_CHUNK_SIZE):
+            response = self._session_command(
+                "erase-full-flash",
+                offset=offset,
+            )
+            expected = min(
+                offset + FULL_FLASH_ERASE_CHUNK_SIZE,
+                total,
+            )
+            if response.offset != expected:
+                raise RecoveryError(
+                    "RAM recovery reported erase progress "
+                    f"{response.offset:#x}, expected {expected:#x}"
+                )
+            if progress is not None:
+                progress(expected, total)
 
-    def write(self, image: bytes) -> None:
+    def write(
+        self,
+        image: bytes,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         for offset in range(0, len(image), PAYLOAD_SIZE):
+            chunk = image[offset : offset + PAYLOAD_SIZE]
             self._session_command(
                 "write-chunk",
                 offset=offset,
-                payload=image[offset : offset + PAYLOAD_SIZE],
+                payload=chunk,
             )
+            if progress is not None:
+                progress(offset + len(chunk), len(image))
 
     def read(self, offset: int, length: int) -> bytes:
         if not 1 <= length <= PAYLOAD_SIZE:
@@ -666,6 +695,14 @@ def command_restore_full(args: argparse.Namespace) -> None:
                 "device is not the RAM-resident full-flash recovery "
                 "personality; refusing destructive command"
             )
+        if (
+            info.capabilities &
+            CAPABILITY_PROGRESSIVE_FULL_ERASE
+        ) == 0:
+            raise RecoveryError(
+                "device lacks progressive full-flash erase; refusing the "
+                "silent monolithic erase implementation"
+            )
         if info.flash_size != len(image):
             raise RecoveryError(
                 f"device reports {info.flash_size} flash bytes, image has "
@@ -679,14 +716,42 @@ def command_restore_full(args: argparse.Namespace) -> None:
             file=sys.stderr,
             flush=True,
         )
-        client.erase_full_flash()
+        erase_report_step = 512 * 1024
+
+        def report_erase(completed: int, total: int) -> None:
+            if (
+                completed == total
+                or completed % erase_report_step == 0
+            ):
+                print(
+                    f"erased {completed // 1024} / "
+                    f"{total // 1024} KiB",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        client.erase_full_flash(report_erase)
         print(
             f"writing {len(image)} bytes in "
             f"{(len(image) + PAYLOAD_SIZE - 1) // PAYLOAD_SIZE} chunks",
             file=sys.stderr,
             flush=True,
         )
-        client.write(image)
+        write_report_step = 512 * 1024
+
+        def report_write(completed: int, total: int) -> None:
+            if (
+                completed == total
+                or completed % write_report_step == 0
+            ):
+                print(
+                    f"wrote {completed // 1024} / "
+                    f"{total // 1024} KiB",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        client.write(image, report_write)
         print(
             "hashing the complete NOR in RAM recovery",
             file=sys.stderr,

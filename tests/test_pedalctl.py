@@ -153,12 +153,15 @@ class FakeTransport:
             raise AssertionError("client sent the wrong sequence")
         self.expected_sequence += 1
         payload = request.payload if request.command == 5 else b""
+        offset = request.offset
+        if request.command == pedalctl.COMMANDS["erase-full-flash"]:
+            offset += pedalctl.FULL_FLASH_ERASE_CHUNK_SIZE
         return pedalctl.Packet(
             command=request.command,
             flags=request.flags,
             session=request.session,
             sequence=request.sequence,
-            offset=request.offset,
+            offset=offset,
             payload=payload,
         ).encode()
 
@@ -214,7 +217,12 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(
             [request.command for request in transport.requests],
-            [10, 11, 4, 4, 12, 8],
+            [10] +
+            [11] * (
+                0x800000 //
+                pedalctl.FULL_FLASH_ERASE_CHUNK_SIZE
+            ) +
+            [4, 4, 12, 8],
         )
         self.assertTrue(
             all(

@@ -151,3 +151,42 @@ class HardwareBootloaderSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplicationHandoffCoherencyTests(unittest.TestCase):
+    """A copied SDRAM image must be visible to instruction fetch.
+
+    The payload reaches SDRAM through the data path while the bootloader
+    runs XIP from flash. Cortex-M7 instruction fetch does not snoop the
+    D-cache, and the bootloader's own verification read cannot detect the
+    problem because it reads back through that same cache. Without the
+    maintenance below the core fetches pre-copy SDRAM contents and faults
+    with no outward sign.
+    """
+
+    def test_bootloader_syncs_memory_before_jumping(self):
+        source = (
+            ROOT / "firmware" / "bootloader" / "src" / "bootloader.c"
+        ).read_text()
+
+        self.assertIn("sync_application_memory", source)
+        self.assertLess(
+            source.index("platform->sync_application_memory"),
+            source.index("jump_to_application();\n    }"),
+        )
+
+    def test_hardware_platform_cleans_and_invalidates(self):
+        source = (
+            ROOT
+            / "firmware"
+            / "bootloader"
+            / "src"
+            / "bootloader_hardware.c"
+        ).read_text()
+
+        self.assertIn("SCB_CleanInvalidateDCache()", source)
+        self.assertIn("SCB_InvalidateICache()", source)
+        self.assertIn(
+            "services.sync_application_memory",
+            source,
+        )

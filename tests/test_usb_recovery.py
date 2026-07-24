@@ -49,7 +49,7 @@ class UsbRecoverySafetyTests(unittest.TestCase):
         self.assertIn("NCR2_OPEN_USB_VID", descriptor)
         self.assertIn("NCR2_OPEN_USB_PID", descriptor)
         self.assertIn(
-            "NCR2_USB_DEVICE_BCD UINT16_C(0x0002)",
+            "NCR2_USB_DEVICE_BCD UINT16_C(0x0005)",
             descriptor,
         )
         self.assertNotIn("0x9527", descriptor.lower())
@@ -79,6 +79,27 @@ class UsbRecoverySafetyTests(unittest.TestCase):
         )
         self.assertIn(
             "ncr2_flexspi_nor_init_full_flash",
+            source,
+        )
+        # The stock FCFB declares only 4 MiB on an 8 MiB part, which put
+        # both application slots outside the mapped window. Reprogramming
+        # the port size must happen during init, before any slot is read.
+        self.assertIn("FLEXSPI->FLSHCR0[0] = NCR2_FLASH_SIZE_KIB", source)
+        self.assertIn("NCR2_FLASH_SIZE_KIB", source)
+        self.assertLess(
+            source.index("FLEXSPI->FLSHCR0[0]"),
+            source.index("FLEXSPI_UpdateLUT("),
+        )
+
+        self.assertIn("NCR2_LUT_SEQUENCE_READ_DATA 10U", source)
+        # ISEQID is four bits and the LUT is 64 words; both limits are
+        # enforced at compile time after a sequence index of 16 silently
+        # aliased to sequence 0 on hardware.
+        self.assertIn("NCR2_LUT_SEQUENCE_LIMIT", source)
+        self.assertIn("NCR2_LUT_TOTAL_WORDS", source)
+        self.assertIn("ram_read_data(", source)
+        self.assertNotIn(
+            "const volatile uint8_t *source",
             source,
         )
 

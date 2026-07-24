@@ -15,8 +15,38 @@
 #define NCR2_LUT_SEQUENCE_READ_STATUS 13U
 #define NCR2_LUT_SEQUENCE_ERASE_SECTOR 14U
 #define NCR2_LUT_SEQUENCE_PAGE_PROGRAM 15U
+/*
+ * The FlexSPI LUT is 64 words: sixteen four-word sequences, and IPCR1
+ * ISEQID is only four bits wide. Sequence 10 sits just below the block
+ * this driver already owns; AHB reads use sequence 0, so claiming it does
+ * not disturb XIP.
+ */
+#define NCR2_LUT_SEQUENCE_READ_DATA 10U
 #define NCR2_LUT_FIRST_WORD (4U * NCR2_LUT_SEQUENCE_READ_ID)
 #define NCR2_LUT_WORD_COUNT 20U
+/* FLSHCR0[FLSHSZ] is a 23-bit KiB count; index 0 is port A1. */
+#define NCR2_FLASH_SIZE_KIB (NCR2_FLASH_SIZE / UINT32_C(1024))
+#define NCR2_FLSHCR0_SIZE_LIMIT_KIB UINT32_C(0x007FFFFF)
+
+_Static_assert(
+    NCR2_FLASH_SIZE_KIB <= NCR2_FLSHCR0_SIZE_LIMIT_KIB,
+    "flash size must fit the FLSHCR0 FLSHSZ field");
+
+#define NCR2_LUT_WORDS_PER_SEQUENCE 4U
+#define NCR2_LUT_SEQUENCE_LIMIT 16U
+#define NCR2_LUT_TOTAL_WORDS 64U
+
+_Static_assert(
+    NCR2_LUT_SEQUENCE_READ_DATA < NCR2_LUT_SEQUENCE_LIMIT,
+    "IPCR1 ISEQID is four bits; sequence indices above 15 alias to 0");
+_Static_assert(
+    NCR2_LUT_FIRST_WORD + NCR2_LUT_WORD_COUNT <= NCR2_LUT_TOTAL_WORDS,
+    "LUT update would run past the end of the 64-word table");
+_Static_assert(
+    (NCR2_LUT_SEQUENCE_READ_DATA + 1U) * NCR2_LUT_WORDS_PER_SEQUENCE <=
+        NCR2_LUT_FIRST_WORD,
+    "the read sequence must not overlap the driver's own LUT block");
+#define NCR2_IP_READ_CHUNK_SIZE UINT32_C(8)
 
 #define NCR2_W25Q64_MANUFACTURER UINT8_C(0xEF)
 #define NCR2_W25Q64_MEMORY_TYPE UINT8_C(0x40)
@@ -236,6 +266,42 @@ static NCR2_RAMFUNC status_t ram_read_status(uint8_t *status_byte)
     return status;
 }
 
+static NCR2_RAMFUNC int ram_read_data(
+    uint32_t flash_offset,
+    uint8_t *destination,
+    uint32_t length)
+{
+    while (length != UINT32_C(0)) {
+        uint32_t data[2] = {
+            UINT32_C(0),
+            UINT32_C(0),
+        };
+        const uint8_t *bytes = (const uint8_t *)data;
+        const uint32_t chunk =
+            length < NCR2_IP_READ_CHUNK_SIZE
+                ? length
+                : NCR2_IP_READ_CHUNK_SIZE;
+
+        if (ram_transfer(
+                NCR2_LUT_SEQUENCE_READ_DATA,
+                flash_offset,
+                kFLEXSPI_Read,
+                data,
+                chunk) != kStatus_Success) {
+            return -1;
+        }
+        for (uint32_t index = UINT32_C(0);
+             index < chunk;
+             ++index) {
+            destination[index] = bytes[index];
+        }
+        flash_offset += chunk;
+        destination += chunk;
+        length -= chunk;
+    }
+    return 0;
+}
+
 static NCR2_RAMFUNC status_t ram_software_reset(void)
 {
     FLEXSPI->MCR0 |= FLEXSPI_MCR0_SWRESET_MASK;
@@ -309,6 +375,7 @@ static NCR2_RAMFUNC int ram_wait_until_flash_idle(void)
 static NCR2_RAMFUNC int ram_configure_and_probe(void)
 {
     uint32_t lut[NCR2_LUT_WORD_COUNT];
+    uint32_t read_lut[NCR2_LUT_WORDS_PER_SEQUENCE] = { 0U, 0U, 0U, 0U };
     uint32_t id_word = UINT32_C(0);
     uint8_t *identifier = (uint8_t *)&id_word;
 
@@ -365,12 +432,44 @@ static NCR2_RAMFUNC int ram_configure_and_probe(void)
             kFLEXSPI_Command_STOP,
             kFLEXSPI_1PAD,
             0x00U);
+    read_lut[0] =
+        FLEXSPI_LUT_SEQ(
+            kFLEXSPI_Command_SDR,
+            kFLEXSPI_1PAD,
+            0x03U,
+            kFLEXSPI_Command_RADDR_SDR,
+            kFLEXSPI_1PAD,
+            0x18U);
+    read_lut[1] =
+        FLEXSPI_LUT_SEQ(
+            kFLEXSPI_Command_READ_SDR,
+            kFLEXSPI_1PAD,
+            0x04U,
+            kFLEXSPI_Command_STOP,
+            kFLEXSPI_1PAD,
+            0x00U);
+
+    /*
+     * The stock boot configuration block declares sflashA1Size = 4 MiB on
+     * an 8 MiB W25Q64, so FlexSPI maps only the low half of the chip. Both
+     * application slots live above that line, which made every access to
+     * them fail: IP commands error out, and an AHB read of 0x60400000 from
+     * the bootloader faults before it can hand off or reach recovery.
+     * Programming the true size here fixes IP and AHB access alike, and
+     * runs before any slot is read.
+     */
+    FLEXSPI->FLSHCR0[0] = NCR2_FLASH_SIZE_KIB;
 
     FLEXSPI_UpdateLUT(
         FLEXSPI,
         NCR2_LUT_FIRST_WORD,
         lut,
         NCR2_LUT_WORD_COUNT);
+    FLEXSPI_UpdateLUT(
+        FLEXSPI,
+        NCR2_LUT_WORDS_PER_SEQUENCE * NCR2_LUT_SEQUENCE_READ_DATA,
+        read_lut,
+        NCR2_LUT_WORDS_PER_SEQUENCE);
     if (ram_software_reset() != kStatus_Success) {
         return -1;
     }
@@ -468,21 +567,34 @@ static int backend_read(void *opaque,
 {
     ncr2_flexspi_context_t *context =
         (ncr2_flexspi_context_t *)opaque;
-    uint8_t *output = (uint8_t *)destination;
-    const volatile uint8_t *source =
-        (const volatile uint8_t *)(uintptr_t)address;
+    uint32_t interrupt_state;
+    int status;
 
     if (context == NULL ||
         context->initialized == UINT8_C(0) ||
-        destination == NULL) {
+        destination == NULL ||
+        address < NCR2_FLASH_XIP_BASE ||
+        length == UINT32_C(0) ||
+        address - NCR2_FLASH_XIP_BASE >= NCR2_FLASH_SIZE ||
+        length > NCR2_FLASH_SIZE -
+            (address - NCR2_FLASH_XIP_BASE)) {
         return -1;
     }
-    for (uint32_t index = UINT32_C(0);
-         index < length;
-         ++index) {
-        output[index] = source[index];
-    }
-    return 0;
+    /*
+     * Do not verify through the XIP/AHB aperture. Physical v0.03 testing
+     * showed that AHB reads can wedge after an IP erase while recovery is
+     * executing from SDRAM. A private 0x03 LUT sequence keeps all recovery
+     * reads on the same bounded IP-command path as erase and program.
+     */
+    interrupt_state = __get_PRIMASK();
+    __disable_irq();
+    status =
+        ram_read_data(
+            address - NCR2_FLASH_XIP_BASE,
+            (uint8_t *)destination,
+            length);
+    __set_PRIMASK(interrupt_state);
+    return status;
 }
 
 static int backend_erase_sector(void *opaque, uint32_t address)

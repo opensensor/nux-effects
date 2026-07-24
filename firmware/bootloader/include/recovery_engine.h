@@ -12,6 +12,8 @@
 #define RECOVERY_CAPABILITY_RETRY_CACHE UINT32_C(0x00000008)
 #define RECOVERY_CAPABILITY_BOUNDED_ERASE UINT32_C(0x00000010)
 #define RECOVERY_CAPABILITY_FULL_FLASH_RAM UINT32_C(0x00000020)
+#define RECOVERY_CAPABILITY_PROGRESSIVE_FULL_ERASE UINT32_C(0x00000040)
+#define RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE UINT32_C(0x00010000)
 
 enum recovery_update_phase {
     RECOVERY_PHASE_IDLE = 0,
@@ -62,6 +64,7 @@ typedef struct recovery_engine {
     uint32_t session;
     uint32_t expected_sequence;
     uint32_t next_write_offset;
+    uint32_t full_erase_offset;
     uint32_t expected_image_size;
     uint32_t session_seed;
     uint8_t expected_image_sha256[32];

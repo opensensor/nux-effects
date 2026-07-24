@@ -301,7 +301,9 @@ static uint16_t handle_get_info(recovery_engine_t *engine,
         RECOVERY_CAPABILITY_RETRY_CACHE |
         RECOVERY_CAPABILITY_BOUNDED_ERASE;
     if (engine->full_flash_enabled != UINT8_C(0)) {
-        info.capabilities |= RECOVERY_CAPABILITY_FULL_FLASH_RAM;
+        info.capabilities |=
+            RECOVERY_CAPABILITY_FULL_FLASH_RAM |
+            RECOVERY_CAPABILITY_PROGRESSIVE_FULL_ERASE;
     }
     info.max_chunk_size = RECOVERY_PAYLOAD_SIZE;
 
@@ -377,6 +379,7 @@ static uint16_t handle_begin_full_flash(
     engine->session = next_session(engine);
     engine->expected_sequence = UINT32_C(1);
     engine->next_write_offset = UINT32_C(0);
+    engine->full_erase_offset = UINT32_C(0);
     engine->expected_image_size = NCR2_FLASH_SIZE;
     engine->target_slot = BOOT_SLOT_NONE;
     engine->phase = RECOVERY_PHASE_BEGUN;
@@ -421,24 +424,39 @@ static uint16_t handle_erase_slot(recovery_engine_t *engine)
     return RECOVERY_STATUS_OK;
 }
 
-static uint16_t handle_erase_full_flash(recovery_engine_t *engine)
+static uint16_t handle_erase_full_flash(
+    recovery_engine_t *engine,
+    const recovery_packet_t *request,
+    recovery_packet_t *response)
 {
+    uint32_t erase_length;
+
     if (engine->full_flash_enabled == UINT8_C(0) ||
         engine->full_flash_session == UINT8_C(0)) {
         return RECOVERY_STATUS_FULL_FLASH_DISABLED;
     }
-    if (engine->phase != RECOVERY_PHASE_BEGUN &&
-        engine->phase != RECOVERY_PHASE_ERASED) {
+    if (engine->phase != RECOVERY_PHASE_BEGUN) {
         return RECOVERY_STATUS_INVALID_STATE;
+    }
+    if (request->offset != engine->full_erase_offset) {
+        return RECOVERY_STATUS_WRITE_ORDER;
+    }
+    erase_length = NCR2_FLASH_SIZE - engine->full_erase_offset;
+    if (erase_length > RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE) {
+        erase_length = RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE;
     }
     if (engine->backend.erase(
             engine->backend.context,
-            NCR2_FLASH_XIP_BASE,
-            NCR2_FLASH_SIZE) != 0) {
+            NCR2_FLASH_XIP_BASE + engine->full_erase_offset,
+            erase_length) != 0) {
         return RECOVERY_STATUS_BACKEND_ERROR;
     }
-    engine->next_write_offset = UINT32_C(0);
-    engine->phase = RECOVERY_PHASE_ERASED;
+    engine->full_erase_offset += erase_length;
+    response->offset = engine->full_erase_offset;
+    if (engine->full_erase_offset == NCR2_FLASH_SIZE) {
+        engine->next_write_offset = UINT32_C(0);
+        engine->phase = RECOVERY_PHASE_ERASED;
+    }
     return RECOVERY_STATUS_OK;
 }
 
@@ -614,7 +632,7 @@ static uint16_t dispatch_command(recovery_engine_t *engine,
     case RECOVERY_COMMAND_BEGIN_FULL_FLASH:
         return handle_begin_full_flash(engine, request, response);
     case RECOVERY_COMMAND_ERASE_FULL_FLASH:
-        return handle_erase_full_flash(engine);
+        return handle_erase_full_flash(engine, request, response);
     case RECOVERY_COMMAND_FINALIZE_FULL_FLASH:
         return handle_finalize_full_flash(engine);
     default:

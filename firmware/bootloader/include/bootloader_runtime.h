@@ -18,6 +18,15 @@ typedef struct bootloader_runtime_services {
     void (*enter_recovery)(
         void *context,
         const boot_controller_result_t *result);
+    /*
+     * Make the copied application visible to instruction fetch before the
+     * handoff. The payload reaches SDRAM through the data path, so on a
+     * core with a write-back D-cache the bytes can still be dirty in cache
+     * while SDRAM holds stale data. The bootloader's own verification read
+     * cannot detect that, because it reads back through the same cache.
+     * Optional: host tests leave this NULL.
+     */
+    void (*sync_application_memory)(void);
 } bootloader_runtime_services_t;
 
 extern volatile uint32_t g_boot_diagnostic;

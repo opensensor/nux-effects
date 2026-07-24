@@ -156,3 +156,39 @@ class BoardSupportSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SdramAudioBufferTests(unittest.TestCase):
+    """Large audio buffers must not enter the flashed image."""
+
+    def test_sdram_buffer_region_is_noload_and_bounded(self):
+        linker = (
+            ROOT / "firmware" / "app" / "ncr2_app.ld"
+        ).read_text()
+
+        self.assertIn(".sdram_bss", linker)
+        self.assertIn("(NOLOAD)", linker.split(".sdram_bss", 1)[1])
+        # Placed clear of the loaded application, and asserted both ways so
+        # neither the image nor the buffers can silently overrun.
+        self.assertIn(
+            "loaded application overruns the SDRAM audio buffer region",
+            linker,
+        )
+        self.assertIn(
+            "SDRAM audio buffers exceed the mapped region",
+            linker,
+        )
+
+    def test_delay_line_lives_in_the_sdram_region(self):
+        application = (
+            ROOT / "firmware" / "hardware_app" / "src" / "main.c"
+        ).read_text()
+
+        self.assertIn('__attribute__((section(".sdram_bss")))', application)
+        # The region is NOLOAD and startup does not clear it, so the buffer
+        # must zero itself or replay power-on garbage on the first pass.
+        self.assertIn("clear_delay_line()", application)
+        self.assertLess(
+            application.index("clear_delay_line();"),
+            application.index("ncr2_factory_audio_init()"),
+        )

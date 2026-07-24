@@ -15,7 +15,7 @@ the pedal while using an independent, versioned packet format.
 
 Development hardware temporarily borrows `9527:c157` so existing host setup
 continues to work. The product string `NUX Effects Open Recover`, packet
-magic, protocol version, and `bcdDevice=0.02` distinguish it from the stock
+magic, protocol version, and `bcdDevice=0.05` distinguish it from the stock
 NUX updater. A project-owned USB identity remains mandatory before
 distribution.
 
@@ -169,7 +169,8 @@ A destructive transaction is:
    - session field `0x45504957` (little-endian `WIPE`);
    - offset exactly `0x00800000`; and
    - payload exactly the expected 32-byte SHA-256;
-3. `ERASE_FULL_FLASH`;
+3. 128 ordered `ERASE_FULL_FLASH` requests, each erasing and acknowledging
+   one 64 KiB range; the response offset is the first byte not yet erased;
 4. ordered `WRITE_CHUNK` reports covering all 8 MiB;
 5. optional `READ_CHUNK` reports;
 6. `FINALIZE_FULL_FLASH`, which re-hashes all 8 MiB; and
@@ -179,6 +180,11 @@ There is no `SET_PENDING` step because the transaction replaces the journal,
 bootloader, and both slots. `REBOOT` is rejected until the complete-chip hash
 matches. Host tooling additionally requires the literal confirmation
 `WIPE-ALL-8MIB`.
+
+Capability bit `0x40` advertises progressive full-chip erase. The host
+refuses the original monolithic implementation when that bit is absent.
+Each 64 KiB response is a durable progress boundary, and exact-request retry
+returns the cached response without erasing the range twice.
 
 This mode is deliberately not power-loss tolerant after the full erase. If
 power or USB is lost before a complete verified rewrite, the chip may be
@@ -236,8 +242,9 @@ python3 tools/pedalctl.py restore-full \
 ```
 
 The input must be exactly 8 MiB and contain plausible `FCFB` and IVT headers.
-The default per-command timeout is ten minutes because the erase is one
-guarded transaction.
+The full-restore command retains a conservative ten-minute per-command
+timeout, but progressive erase keeps every individual request bounded to one
+64 KiB range and prints aggregate progress every 512 KiB.
 
 ## Status values
 

@@ -10,6 +10,10 @@
 #define NCR2_FACTORY_SLOT_BOARD_CONTROLS 0
 #endif
 
+#ifndef NCR2_FACTORY_BOARD_EFFECT_ACTIVE_LOW
+#define NCR2_FACTORY_BOARD_EFFECT_ACTIVE_LOW 0
+#endif
+
 #if NCR2_FACTORY_SLOT_BOARD_CONTROLS
 
 #define NCR2_GPIO1_IO24_MASK (UINT32_C(1) << 24)
@@ -39,10 +43,17 @@
 
 #define NCR2_BOARD_RELEASE_DELAY_US UINT32_C(100000)
 #define NCR2_MICROSECONDS_PER_SECOND UINT32_C(1000000)
+#define NCR2_MILLISECONDS_PER_SECOND UINT32_C(1000)
 
 static void configure_control_pins(void)
 {
     CLOCK_EnableClock(kCLOCK_Iomuxc);
+    /*
+     * The stock DCD ungates every CCGR, but a diagnostic must not depend
+     * on that to explain a dark board.
+     */
+    CLOCK_EnableClock(kCLOCK_Gpio1);
+    CLOCK_EnableClock(kCLOCK_Gpio2);
 
     IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_08_GPIO1_IO24, 0U);
     IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_10_GPIO1_IO26, 0U);
@@ -83,18 +94,127 @@ static void configure_control_pins(void)
         UINT32_C(0x70b0));
 }
 
+/*
+ * Some Cortex-M7 implementations ignore DWT control writes until the
+ * CoreSight lock is released, and a stopped cycle counter turns every
+ * delay into an unbounded spin. Probe once and remember the answer.
+ */
+#define NCR2_DWT_LOCK_ACCESS (*(volatile uint32_t *)UINT32_C(0xE0001FB0))
+#define NCR2_DWT_UNLOCK_KEY UINT32_C(0xC5ACCE55)
+#define NCR2_DWT_PROBE_ITERATIONS UINT32_C(256)
+#define NCR2_FALLBACK_CYCLES_PER_ITERATION UINT32_C(4)
+#define NCR2_DELAY_MAX_MILLISECONDS UINT32_C(4000)
+
+static uint8_t g_cycle_counter_probed;
+static uint8_t g_cycle_counter_usable;
+
+static uint8_t cycle_counter_usable(void)
+{
+    uint32_t first;
+    uint32_t second;
+
+    if (g_cycle_counter_probed != UINT8_C(0)) {
+        return g_cycle_counter_usable;
+    }
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    NCR2_DWT_LOCK_ACCESS = NCR2_DWT_UNLOCK_KEY;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    first = DWT->CYCCNT;
+    for (volatile uint32_t index = UINT32_C(0);
+         index < NCR2_DWT_PROBE_ITERATIONS;
+         ++index) {
+        __NOP();
+    }
+    second = DWT->CYCCNT;
+    g_cycle_counter_usable = (second != first) ? UINT8_C(1) : UINT8_C(0);
+    g_cycle_counter_probed = UINT8_C(1);
+    return g_cycle_counter_usable;
+}
+
+/*
+ * Service WDOG1 from inside the wait itself. Refreshing only between waits
+ * is not enough: SystemCoreClock is a compile-time constant here, so if it
+ * overstates the real core clock a single "two second" wait can outlast the
+ * watchdog and reset the board mid-diagnostic. Refreshing in the loop makes
+ * a miscalibrated delay merely slow instead of fatal, while a genuine hang
+ * outside a delay still trips the watchdog as intended.
+ */
+static void service_watchdog(void)
+{
+    WDOG1->WSR = UINT16_C(0x5555);
+    WDOG1->WSR = UINT16_C(0xAAAA);
+}
+
+static void delay_milliseconds(uint32_t milliseconds)
+{
+    const uint32_t cycles_per_millisecond =
+        SystemCoreClock / NCR2_MILLISECONDS_PER_SECOND;
+    uint32_t bounded = milliseconds;
+
+    if (bounded > NCR2_DELAY_MAX_MILLISECONDS) {
+        bounded = NCR2_DELAY_MAX_MILLISECONDS;
+    }
+    if (cycle_counter_usable() != UINT8_C(0)) {
+        const uint32_t target = cycles_per_millisecond * bounded;
+        const uint32_t start = DWT->CYCCNT;
+
+        while ((uint32_t)(DWT->CYCCNT - start) < target) {
+            service_watchdog();
+        }
+        return;
+    }
+    for (volatile uint32_t remaining =
+             (cycles_per_millisecond /
+              NCR2_FALLBACK_CYCLES_PER_ITERATION) * bounded;
+         remaining != UINT32_C(0);
+         --remaining) {
+        service_watchdog();
+    }
+}
+
 static void delay_microseconds(uint32_t microseconds)
 {
-    const uint32_t cycles_per_microsecond =
-        SystemCoreClock / NCR2_MICROSECONDS_PER_SECOND;
-    const uint32_t target =
-        cycles_per_microsecond * microseconds;
-    const uint32_t start = DWT->CYCCNT;
+    delay_milliseconds(
+        microseconds /
+        (NCR2_MICROSECONDS_PER_SECOND /
+         NCR2_MILLISECONDS_PER_SECOND));
+}
 
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-    while ((uint32_t)(DWT->CYCCNT - start) < target) {
-        __NOP();
+typedef struct board_output_candidate {
+    GPIO_Type *port;
+    uint32_t mask;
+    uint8_t idle_high;
+} board_output_candidate_t;
+
+/*
+ * The recovered factory startup levels: GPIO1_IO24 and GPIO1_IO31 idle
+ * high, GPIO2_IO26 idles high, and the remaining traced outputs idle low.
+ */
+static const board_output_candidate_t g_candidates[] = {
+    { GPIO1, NCR2_GPIO1_IO24_MASK, UINT8_C(1) },
+    { GPIO1, NCR2_GPIO1_IO26_MASK, UINT8_C(0) },
+    { GPIO1, NCR2_GPIO1_IO31_MASK, UINT8_C(1) },
+    { GPIO2, NCR2_GPIO2_IO11_MASK, UINT8_C(0) },
+    { GPIO2, NCR2_GPIO2_IO23_MASK, UINT8_C(0) },
+    { GPIO2, NCR2_GPIO2_IO24_MASK, UINT8_C(0) },
+    { GPIO2, NCR2_GPIO2_IO25_MASK, UINT8_C(0) },
+    { GPIO2, NCR2_GPIO2_IO26_MASK, UINT8_C(1) },
+    { GPIO2, NCR2_GPIO2_IO27_MASK, UINT8_C(0) },
+};
+
+_Static_assert(
+    (sizeof(g_candidates) / sizeof(g_candidates[0])) ==
+        NCR2_FACTORY_BOARD_CANDIDATE_COUNT,
+    "candidate blink codes must match the documented pin order");
+
+static void drive_candidate(
+    const board_output_candidate_t *candidate,
+    uint8_t high)
+{
+    if (high != UINT8_C(0)) {
+        candidate->port->DR_SET = candidate->mask;
+    } else {
+        candidate->port->DR_CLEAR = candidate->mask;
     }
 }
 
@@ -124,6 +244,108 @@ void ncr2_factory_board_release_audio(void)
 #if NCR2_FACTORY_SLOT_BOARD_CONTROLS
     delay_microseconds(NCR2_BOARD_RELEASE_DELAY_US);
     GPIO1->DR |= NCR2_GPIO1_IO26_MASK;
+#if NCR2_FACTORY_BOARD_EFFECT_ACTIVE_LOW
+    /*
+     * GPIO1_IO24 and GPIO1_IO31 are the paired outputs changed by the
+     * factory pass/bypass state routine. Keep the recovered high startup
+     * level while clocks and DMA settle, then test the active-low effect
+     * polarity only in the explicitly gated hardware application.
+     */
+    GPIO1->DR &=
+        ~(NCR2_GPIO1_IO24_MASK | NCR2_GPIO1_IO31_MASK);
+#endif
     __DSB();
+#endif
+}
+
+void ncr2_factory_board_set_indicator(
+    ncr2_factory_indicator_state_t state)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    const uint32_t indicator_mask =
+        NCR2_GPIO1_IO24_MASK | NCR2_GPIO1_IO31_MASK;
+    uint32_t low_mask = 0U;
+
+    if (state == NCR2_FACTORY_INDICATOR_IO24) {
+        low_mask = NCR2_GPIO1_IO24_MASK;
+    } else if (state == NCR2_FACTORY_INDICATOR_IO31) {
+        low_mask = NCR2_GPIO1_IO31_MASK;
+    } else if (state == NCR2_FACTORY_INDICATOR_BOTH_LOW) {
+        low_mask = indicator_mask;
+    }
+
+    /*
+     * The RT1051 GPIO set/clear aliases avoid exposing an intermediate
+     * read-modify-write state to interrupts or future control tasks.
+     */
+    GPIO1->DR_SET = indicator_mask;
+    GPIO1->DR_CLEAR = low_mask;
+    __DSB();
+#else
+    (void)state;
+#endif
+}
+
+uint32_t ncr2_factory_board_candidate_count(void)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    return (uint32_t)(sizeof(g_candidates) / sizeof(g_candidates[0]));
+#else
+    return UINT32_C(0);
+#endif
+}
+
+void ncr2_factory_board_restore_idle(void)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    for (uint32_t index = UINT32_C(0);
+         index < ncr2_factory_board_candidate_count();
+         ++index) {
+        drive_candidate(
+            &g_candidates[index],
+            g_candidates[index].idle_high);
+    }
+    __DSB();
+#endif
+}
+
+void ncr2_factory_board_pulse_candidate(uint32_t index)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    if (index >= ncr2_factory_board_candidate_count()) {
+        return;
+    }
+    ncr2_factory_board_restore_idle();
+    drive_candidate(
+        &g_candidates[index],
+        (g_candidates[index].idle_high != UINT8_C(0))
+            ? UINT8_C(0)
+            : UINT8_C(1));
+    __DSB();
+#else
+    (void)index;
+#endif
+}
+
+void ncr2_factory_board_set_relay(uint8_t engaged)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    if (engaged != UINT8_C(0)) {
+        GPIO2->DR_SET = NCR2_GPIO2_IO24_MASK;
+    } else {
+        GPIO2->DR_CLEAR = NCR2_GPIO2_IO24_MASK;
+    }
+    __DSB();
+#else
+    (void)engaged;
+#endif
+}
+
+void ncr2_factory_board_delay_ms(uint32_t milliseconds)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    delay_milliseconds(milliseconds);
+#else
+    (void)milliseconds;
 #endif
 }

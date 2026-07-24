@@ -73,19 +73,21 @@ sudo chmod a+rw /dev/bus/usb/BBB/DDD
 
 Do not power-cycle between the `load` and `flash` stages.
 
-For a persistent setup, add both identities to a udev rule:
-
-```udev
-SUBSYSTEM=="usb", ATTR{idVendor}=="1fc9", ATTR{idProduct}=="0130", MODE="0666"
-SUBSYSTEM=="usb", ATTR{idVendor}=="15a2", ATTR{idProduct}=="0073", MODE="0666"
-```
-
-Reload the rules before reconnecting:
+For a persistent setup, install the repository's narrowly scoped rule. It
+covers both the raw USB node and the `hidraw` node created by NXP's host
+tools, as well as the OpenSensor recovery personality:
 
 ```bash
+sudo install -m 0644 \
+  tools/udev/99-nux-effects-recovery.rules \
+  /etc/udev/rules.d/99-nux-effects-recovery.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
+
+Reconnect once after installing it. Future transitions between
+`9527:c157`, `1fc9:0130`, and `15a2:0073` will receive the permissions
+automatically.
 
 ## Recovery commands
 
