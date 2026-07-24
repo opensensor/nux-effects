@@ -17,6 +17,7 @@ class FactorySlotSourceTests(unittest.TestCase):
 
         self.assertIn(".global g_factory_slot_vectors", source)
         self.assertIn(".word __stack_top", source)
+        self.assertIn(".word DMA0_DMA16_IRQHandler", source)
         self.assertIn("msr     msp", source)
         self.assertIn("0xe000ed08", source)
         self.assertIn("bl      SystemInit", source)
@@ -56,7 +57,45 @@ class FactorySlotSourceTests(unittest.TestCase):
         self.assertIn("ITCM_COPY_END = 0x0001E000", checker)
         self.assertIn("DTCM_END = 0x20020000", checker)
         self.assertIn('"g_factory_slot_vectors"', checker)
+        self.assertIn('"DMA0_DMA16_IRQHandler"', checker)
         self.assertIn('"SystemInit"', checker)
+        self.assertIn("vectors[16]", checker)
+
+    def test_audio_passthrough_is_explicitly_opt_in(self):
+        cmake = (ROOT / "firmware" / "CMakeLists.txt").read_text()
+        source = (
+            ROOT
+            / "firmware"
+            / "factory_slot"
+            / "src"
+            / "audio_passthrough.c"
+        ).read_text()
+
+        self.assertIn("NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH", cmake)
+        self.assertIn(
+            'option(\n'
+            '    NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH\n'
+            '    "Enable the recovered unapproved SAI1/eDMA '
+            'factory-slot passthrough"\n'
+            '    OFF\n'
+            ')',
+            cmake,
+        )
+        self.assertIn("#if NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH", source)
+        self.assertIn("SAI1->TCR4 = UINT32_C(0x00031f1b)", source)
+        self.assertIn("NCR2_AUDIO_RX_DMAMUX_SOURCE UINT32_C(19)", source)
+        self.assertIn("NCR2_AUDIO_TX_DMAMUX_SOURCE UINT32_C(20)", source)
+
+    def test_source_audio_emulator_is_offline_only(self):
+        source = (
+            ROOT / "tools" / "emulate_source_audio.py"
+        ).read_text()
+
+        self.assertNotIn("/dev/", source)
+        self.assertNotIn("hidraw", source)
+        self.assertNotIn("usb.core", source)
+        self.assertIn("EXPECTED_SAI", source)
+        self.assertIn("_validate_passthrough_isr", source)
 
 
 if __name__ == "__main__":

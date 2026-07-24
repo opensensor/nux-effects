@@ -149,14 +149,38 @@ python3 tools/emulate_factory_audio.py \
 Successful execution stops at Metal ITCM address `0x8110`, immediately after
 the factory initializer enables both SAI1 directions and their DMA requests.
 
+The source implementation can be built and checked independently:
+
+```sh
+cmake -S firmware -B build/factory-audio -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_FACTORY_SLOT_APP=ON \
+  -DNCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/factory-audio --target ncr2_factory_slot_app
+python3 tools/check_factory_slot.py \
+  build/factory-audio/ncr2_factory_slot_app.elf
+PYTHONPATH=/path/to/unicorn \
+python3 tools/emulate_source_audio.py \
+  build/factory-audio/ncr2_factory_slot_app.elf
+```
+
+The source emulator validates the exact SAI1, PLL, pin, DMAMUX, and hardware
+TCD state and executes one synthetic RX-completion interrupt through the
+weak passthrough block hook. This is a strong digital-contract check, but it
+does not model the external converter or analog switching.
+
 ## Remaining hardware gates
 
-This is enough to implement the digital audio loop. It is not by itself enough
-to declare an image safe to flash. Before hardware deployment, the source
-target must also reproduce or conservatively preserve:
+The digital audio loop is now implemented. That is not by itself enough to
+declare an image safe to flash. Before hardware deployment, the source target
+must also reproduce or conservatively preserve:
 
 1. the analog mute/bypass/relay sequencing;
-2. cache coherency for DMA buffers;
-3. the eDMA IRQ vector and acknowledgement path;
-4. a bounded failure mode that leaves the analog path muted or bypassed;
-5. a byte-identical known-good Metal restore container.
+2. a bounded failure mode that leaves the analog path muted or bypassed;
+3. a byte-identical known-good Metal restore container.
+
+The current source buffers and TCDs are in DTCM, so data-cache coherency is
+not involved. External IRQ0 and the eDMA acknowledgement/copy path are
+validated by the post-link checker and source emulator.

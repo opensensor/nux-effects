@@ -10,7 +10,13 @@
 g_factory_slot_vectors:
     .word __stack_top
     .word Reset_Handler
-    .rept 174
+    /* Cortex-M system exceptions, vector words 2 through 15. */
+    .rept 14
+    .word Default_Handler
+    .endr
+    /* RT1051 external interrupt 0: shared eDMA channels 0 and 16. */
+    .word DMA0_DMA16_IRQHandler
+    .rept 159
     .word Default_Handler
     .endr
 .size g_factory_slot_vectors, . - g_factory_slot_vectors

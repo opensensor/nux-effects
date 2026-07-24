@@ -99,8 +99,12 @@ An additional opt-in transition target now links the open application directly
 for the factory engine-slot ABI: vectors at ITCM zero, DTCM stack, pinned
 `SystemInit`, and a hard `0x1e000` copy limit. The recovered OEM updater packer
 can wrap it in a validated BINA stream and emits a byte-identical Metal restore
-alongside it. This is an offline packaging milestone, not a flash candidate:
-the source image does not initialize audio or any target-visible diagnostics.
+alongside it. An additional opt-in source path now reproduces the executed
+factory SAI1/eDMA contract, including the PLL, pins, four-slot framing,
+ping-pong TCD rings, IRQ0 handler, and a weak passthrough/DSP hook. It passes
+offline reset/register emulation and a synthetic DMA-block copy. This remains
+an offline packaging milestone, not a flash candidate, until the external
+analog mute/bypass sequencing is recovered.
 
 The application now has an allocation-free extensible effect registry,
 caller-sized processing chains, validated program/bank catalogs, and a

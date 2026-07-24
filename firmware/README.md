@@ -62,7 +62,9 @@ Implemented:
   preserved vectors, copies the engine to ITCM, and reproduces the stock
   handoff without embedding factory bytes.
 - an opt-in source application linked to the recovered factory ITCM slot ABI,
-  with a strict post-link checker and paired OEM-DFU/Metal-restore packer.
+  with a strict post-link checker and paired OEM-DFU/Metal-restore packer;
+- an opt-in factory-compatible SAI1/eDMA passthrough with DTCM ping-pong
+  buffers, a weak source DSP hook, and offline register/ISR emulation.
 
 Not implemented:
 
@@ -73,7 +75,9 @@ Not implemented:
   and watchdog confirmation/rollback;
 - source-controlled MPU/data-cache policy for the full open application;
 - source SEMC initialization;
-- GPIO diagnostics or audio.
+- physical validation of the source audio path and analog mute/bypass
+  sequencing;
+- GPIO diagnostics.
 
 ## Build
 
@@ -233,8 +237,8 @@ audit and corrected metadata layout.
 ## Build the source factory-slot application
 
 This transition target runs source-owned code through the still-recoverable
-factory launcher. It is excluded from the default build and currently has no
-audio or target-visible diagnostics:
+factory launcher. It is excluded from the default build. Its audio path is a
+second explicit opt-in because analog mute/bypass control is not yet known:
 
 ```sh
 cmake -S firmware -B build/factory-slot -G Ninja \
@@ -242,9 +246,13 @@ cmake -S firmware -B build/factory-slot -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
   -DCMAKE_BUILD_TYPE=Release \
   -DNCR2_BUILD_FACTORY_SLOT_APP=ON \
+  -DNCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=ON \
   -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
 cmake --build build/factory-slot --target ncr2_factory_slot_app
 python3 tools/check_factory_slot.py \
+  build/factory-slot/ncr2_factory_slot_app.elf
+PYTHONPATH=/path/to/unicorn \
+python3 tools/emulate_source_audio.py \
   build/factory-slot/ncr2_factory_slot_app.elf
 ```
 
@@ -259,8 +267,9 @@ python3 tools/nux_dfu.py make-factory-slot \
   build/factory-slot/metal-restore.bina
 ```
 
-Do not stream the source package yet. It is a structurally valid launch image,
-not a useful or approved pedal image. See
+Do not stream the source package yet. It is a structurally valid digital
+passthrough image, but it is not approved until analog mute/bypass sequencing
+has been recovered and reviewed. See
 [FACTORY_SLOT_APP.md](../docs/hardware/FACTORY_SLOT_APP.md).
 
 ## Build a guarded offline full image

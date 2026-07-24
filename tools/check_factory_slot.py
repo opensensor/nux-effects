@@ -18,6 +18,7 @@ DTCM_START = 0x20000000
 DTCM_END = 0x20020000
 VECTOR_WORDS = 176
 REQUIRED_SYMBOLS = {
+    "DMA0_DMA16_IRQHandler",
     "Default_Handler",
     "Reset_Handler",
     "SystemInit",
@@ -160,6 +161,11 @@ def main() -> int:
         raise SystemExit(f"unexpected initial stack 0x{vectors[0]:08x}")
     if (vectors[1] & ~1) != reset or not vectors[1] & 1:
         raise SystemExit("reset vector does not target Thumb Reset_Handler")
+    dma_handler = symbols["DMA0_DMA16_IRQHandler"] & ~1
+    if (vectors[16] & ~1) != dma_handler or not vectors[16] & 1:
+        raise SystemExit(
+            "external IRQ0 does not target Thumb DMA0_DMA16_IRQHandler"
+        )
     if binary_size != image_end or binary_size > ITCM_COPY_END:
         raise SystemExit(
             f"raw image size 0x{binary_size:x} does not match "
