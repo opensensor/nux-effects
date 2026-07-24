@@ -163,9 +163,11 @@ python3 tools/check_ramfunc.py \
   build/open-flexspi/ncr2_flexspi_link_probe.elf
 ```
 
-This remains an offline gate. The adapter is not wired to `bootloader_main`
-or the USB recovery engine, and no erase/program command has been issued to
-the physical pedal.
+This remains an offline gate. `bootloader_main` now uses the host-tested boot
+controller, but supplies it a deliberately read-only XIP journal backend.
+The MCUX FlexSPI adapter is still not wired to that controller or the USB
+recovery engine, and no erase/program command has been issued to the physical
+pedal.
 
 ## Next hardware gates
 

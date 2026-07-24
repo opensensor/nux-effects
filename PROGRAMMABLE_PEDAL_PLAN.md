@@ -229,6 +229,20 @@ Recovery order:
 
 The verified full dump remains immutable and offline.
 
+### Implemented policy checkpoint
+
+The source tree now contains the hardware-independent controller for this
+policy. It records a pending trial before slot loading, rejects a corrupt
+pending slot before fallback, rolls back after three unconfirmed boots, and
+enters recovery on journal or dual-slot failure. Forced recovery is sampled
+before lifecycle preparation, so entering recovery never consumes a trial.
+
+A magic/inverse one-shot mailbox is reserved at `0x20000000` for
+application-requested recovery after a warm reset. Retention across the
+selected RT1051 reset source remains a target test. Live switching among
+Delay, Reverb, Modulation, and Drive remains application RAM state and does
+not use this mailbox or write flash.
+
 ## 6. Unified pedal application
 
 ### Execution model
@@ -648,22 +662,22 @@ the C ABI between bootloader, platform, and application.
 
 ## 13. Immediate next work package
 
-Do not replace the bootloader yet. The next implementation session should:
+Do not replace the bootloader yet. The repository, pinned SDK, guarded image
+packer, A/B policy, open recovery protocol, USB adapter, and RAM-resident NOR
+adapter now exist and pass their offline gates. The next implementation
+session should:
 
-1. Create the source repository skeleton and pin the NXP SDK revision.
-2. Generate a machine-readable flash map and full-image overlap validator.
-3. Extract the stock FCFB/DCD into reviewed source structures.
-4. Build a bootable "recovery heartbeat" image for offline inspection.
-5. Map the PCB's debug and audio pins before that image is programmed.
-6. Prepare a one-time full-chip overlay that:
-   - starts from the verified factory dump;
-   - restores the original four factory slots;
-   - installs the open bootloader;
-   - installs application A;
-   - leaves application B erased;
-   - emits a complete range diff and SHA-256 manifest.
+1. Build the RT1051 board clock, USB PHY, interrupt, reset, and confirmed
+   recovery-footswitch wrapper.
+2. Assign a non-NUX USB development VID/PID.
+3. Enumerate a RAM/debug recovery image and exercise only `GET_INFO`.
+4. Prove the DTCM software-recovery mailbox survives the chosen warm reset.
+5. Validate erase/program/readback on one sacrificial application sector.
+6. Power-cut the two-sector journal at every mutation boundary.
+7. Add watchdog-backed application confirmation and hard-fault rollback.
+8. Map the remaining audio codec, SAI, eDMA, ADC, GPIO, mute, and bypass
+   details before implementing the four-mode source DSP application.
 
 The first physical open-firmware test should prove only boot, watchdog,
 recovery USB, and rollback. Audio comes after recovery is independently
 reliable.
-

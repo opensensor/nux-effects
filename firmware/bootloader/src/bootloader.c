@@ -1,7 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "boot_state.h"
+#include "boot_controller.h"
+#include "boot_recovery_request.h"
 #include "crc32.h"
 #include "ncr2_flash_layout.h"
 #include "pedal_image.h"
@@ -20,6 +21,9 @@ enum boot_diagnostic_code {
 
 volatile uint32_t g_boot_diagnostic
     __attribute__((section(".noinit")));
+
+boot_recovery_mailbox_t g_boot_recovery_mailbox
+    __attribute__((section(".boot_mailbox")));
 
 static void data_sync_barrier(void)
 {
@@ -115,7 +119,7 @@ static void copy_payload(const pedal_image_manifest_t *manifest,
     data_sync_barrier();
 }
 
-static int try_slot(uint32_t slot_address)
+static uint16_t try_slot_address(uint32_t slot_address)
 {
     const pedal_image_manifest_t *manifest =
         (const pedal_image_manifest_t *)(uintptr_t)slot_address;
@@ -126,7 +130,7 @@ static int try_slot(uint32_t slot_address)
     if (!manifest_is_valid(manifest) ||
         !vector_is_valid(manifest, payload) ||
         !payload_hash_is_valid(manifest, payload)) {
-        return 0;
+        return BOOT_CONTROLLER_SLOT_INVALID;
     }
 
     copy_payload(manifest, payload);
@@ -134,9 +138,85 @@ static int try_slot(uint32_t slot_address)
             manifest,
             (const uint8_t *)(uintptr_t)manifest->load_address)) {
         g_boot_diagnostic = BOOT_DIAGNOSTIC_COPY_FAILED;
-        return 0;
+        return BOOT_CONTROLLER_SLOT_COPY_FAILED;
     }
-    return 1;
+    return BOOT_CONTROLLER_SLOT_OK;
+}
+
+static uint16_t load_slot(void *context, uint8_t slot)
+{
+    uint16_t status;
+
+    (void)context;
+    if (slot == BOOT_SLOT_A) {
+        status = try_slot_address(NCR2_APPLICATION_A_ADDRESS);
+        if (status == BOOT_CONTROLLER_SLOT_INVALID) {
+            g_boot_diagnostic =
+                BOOT_DIAGNOSTIC_SLOT_A_INVALID;
+        }
+        return status;
+    }
+    if (slot == BOOT_SLOT_B) {
+        status = try_slot_address(NCR2_APPLICATION_B_ADDRESS);
+        if (status == BOOT_CONTROLLER_SLOT_INVALID) {
+            g_boot_diagnostic =
+                BOOT_DIAGNOSTIC_SLOT_B_INVALID;
+        }
+        return status;
+    }
+    return BOOT_CONTROLLER_SLOT_INVALID;
+}
+
+static int metadata_read(void *context,
+                         uint32_t address,
+                         void *destination,
+                         uint32_t length)
+{
+    const uint8_t *source =
+        (const uint8_t *)(uintptr_t)address;
+    uint8_t *output = (uint8_t *)destination;
+
+    (void)context;
+    if (destination == NULL) {
+        return -1;
+    }
+    for (uint32_t index = 0U; index < length; ++index) {
+        output[index] = source[index];
+    }
+    return 0;
+}
+
+static int metadata_mutation_disabled(
+    void *context,
+    uint32_t address,
+    uint32_t length)
+{
+    (void)context;
+    (void)address;
+    (void)length;
+    return -1;
+}
+
+static int metadata_program_disabled(
+    void *context,
+    uint32_t address,
+    const void *source,
+    uint32_t length)
+{
+    (void)context;
+    (void)address;
+    (void)source;
+    (void)length;
+    return -1;
+}
+
+static int recovery_requested(void *context)
+{
+    boot_recovery_request_t *request =
+        (boot_recovery_request_t *)context;
+
+    return boot_recovery_request_consume(request) !=
+           BOOT_RECOVERY_REQUEST_NONE;
 }
 
 __attribute__((noreturn))
@@ -164,47 +244,38 @@ static void jump_to_application(void)
 
 void bootloader_main(void)
 {
-    const void *metadata_a =
-        (const void *)(uintptr_t)(
-            NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET);
-    const void *metadata_b =
-        (const void *)(uintptr_t)(
-            NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET +
-            BOOT_RECORD_SECTOR_SIZE);
-    boot_state_t boot_state;
-    uint8_t selected_slot;
+    boot_journal_backend_t journal = {
+        .context = NULL,
+        .read = metadata_read,
+        .erase = metadata_mutation_disabled,
+        .program = metadata_program_disabled,
+    };
+    boot_recovery_request_t recovery_request = {
+        .mailbox = &g_boot_recovery_mailbox,
+        .physical_context = NULL,
+        .physical_asserted = NULL,
+    };
+    boot_controller_services_t services = {
+        .journal = &journal,
+        .metadata_address =
+            NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET,
+        .context = &recovery_request,
+        .recovery_requested = recovery_requested,
+        .load_slot = load_slot,
+    };
+    boot_controller_result_t result;
 
     g_boot_diagnostic = BOOT_DIAGNOSTIC_RESET;
-    boot_state_scan(metadata_a, metadata_b, &boot_state);
-    selected_slot = boot_state_selected_slot(&boot_state);
-
-    if (selected_slot == BOOT_SLOT_A &&
-        try_slot(NCR2_APPLICATION_A_ADDRESS)) {
+    boot_controller_run(&services, &result);
+    if (result.action == BOOT_CONTROLLER_HANDOFF) {
         jump_to_application();
-    }
-    if (selected_slot == BOOT_SLOT_B &&
-        try_slot(NCR2_APPLICATION_B_ADDRESS)) {
-        jump_to_application();
-    }
-
-    if (selected_slot != BOOT_SLOT_A) {
-        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_B_INVALID;
-        if (try_slot(NCR2_APPLICATION_A_ADDRESS)) {
-            jump_to_application();
-        }
-        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_A_INVALID;
-    } else {
-        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_A_INVALID;
-        if (try_slot(NCR2_APPLICATION_B_ADDRESS)) {
-            jump_to_application();
-        }
-        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_B_INVALID;
     }
 
     /*
-     * Recovery USB and the physical recovery input are the next hardware
-     * milestone. Until both are verified, an invalid image intentionally
-     * stops here and this binary must not be flashed.
+     * The controller now reaches a real recovery decision, but the USB
+     * board wrapper and physical input remain deliberately unlinked.
+     * Until both are verified, recovery stops here and this binary must
+     * not be flashed.
      */
     g_boot_diagnostic = BOOT_DIAGNOSTIC_RECOVERY;
     for (;;) {

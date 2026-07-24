@@ -66,3 +66,6 @@ implemented under host tests. The 64-byte USB HID adapter now compile-checks
 against the pinned RT1051 MCUX SDK; board clock/IRQ integration and the
 RAM-resident FlexSPI backend now compile/link-check independently. Both
 remain disconnected from the boot path behind the no-flash hardware gate.
+The boot decision controller itself is now integrated with a deliberately
+read-only backend and host-tested for forced recovery, pending trials,
+immediate rejection, rollback, and emergency slot fallback.

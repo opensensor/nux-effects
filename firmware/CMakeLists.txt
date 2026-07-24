@@ -78,8 +78,10 @@ endfunction()
 add_executable(
     ncr2_bootloader
     bootloader/src/startup.S
+    bootloader/src/boot_controller.c
     bootloader/src/boot_journal.c
     bootloader/src/boot_lifecycle.c
+    bootloader/src/boot_recovery_request.c
     bootloader/src/bootloader.c
     bootloader/src/boot_state.c
     bootloader/src/crc32.c
@@ -108,11 +110,14 @@ add_executable(
     ncr2_app
     app/src/startup.S
     app/src/main.c
+    bootloader/src/boot_recovery_request.c
+    platform/ncr2/src/ncr2_boot_request.c
 )
 target_include_directories(
     ncr2_app
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
         ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
 )
 ncr2_firmware_target(

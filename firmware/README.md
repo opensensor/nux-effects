@@ -18,6 +18,11 @@ Implemented:
 - journaled A/B boot-state format and slot selection with fallback;
 - power-loss-safe two-sector journal append/rotation layer;
 - three-attempt pending boot, explicit confirmation, and rollback policy;
+- a host-tested boot controller that journals trials before loading,
+  durably rejects bad pending images, falls back once, and enters recovery
+  on journal or image failure;
+- a fixed, one-shot DTCM software-recovery mailbox shared by both linker
+  scripts, plus an application-facing arm API;
 - vector, stack, size, board, and load-address checks;
 - range-confined 64-byte open recovery packet format;
 - host-tested inactive-slot update transaction and retry behavior;
@@ -35,7 +40,8 @@ Not implemented:
 - footswitch recovery input;
 - USB clock/PHY/IRQ board wrapper and a project USB VID/PID;
 - physical validation of FlexSPI erase/program on a sacrificial sector;
-- boot-lifecycle and recovery wiring into `bootloader_main`;
+- hardware-backed journal mutation and USB recovery entry from
+  `bootloader_main`;
 - watchdog confirmation and rollback;
 - cache/MPU setup;
 - source SEMC initialization;
@@ -64,6 +70,10 @@ python3 tools/fetch_mcux_sdk.py
 
 The current boot skeleton deliberately needs no vendor headers, which keeps
 image-format and recovery logic host-testable.
+
+The controller policy and the current no-write hardware boundary are
+documented in
+[BOOT_CONTROLLER.md](../docs/boot/BOOT_CONTROLLER.md).
 
 The pinned RT1050 vendor HID example was also built successfully from this
 workspace. The exact integration delta for the real RT1051 pedal is recorded
