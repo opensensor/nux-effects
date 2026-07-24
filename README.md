@@ -51,9 +51,12 @@ Do not flash experimental firmware unless you have:
 3. reviewed the exact write ranges; and
 4. confirmed the target hardware revision.
 
-The source-level replacement bootloader has not yet reached its hardware
-flash gate. The currently documented USB tool targets the recovered factory
-HID bootloader and requires explicit hashes and execution flags.
+The source-level replacement bootloader now has an opt-in, structurally
+bootable RT1051 target, but it has not passed the physical hardware flash
+gate. It is read-only by default, cannot enumerate with unassigned USB IDs,
+and is not an approved image for the pedal. The currently documented USB
+tool targets the recovered factory HID bootloader and requires explicit
+hashes and execution flags.
 
 ## Development status
 
@@ -63,19 +66,20 @@ proving the shared Core Deluxe platform and the USB deployment path.
 
 Development is now moving to an independent bootloader, board-support
 package, deterministic audio engine, and original/open DSP implementations.
-The guarded A/B recovery transaction and matching host client are now
-implemented under host tests. The 64-byte USB HID adapter now compile-checks
-against the pinned RT1051 MCUX SDK. A minimal board wrapper now source-defines
-the recovered early-boot inputs, USB1 clock/PHY/IRQ setup, and warm reset;
-the RAM-resident FlexSPI backend is also compile/link-checked. A deliberately
-nonbootable integration probe joins all three without a vector table or reset
-entry. They remain disconnected from the boot path behind the no-flash
-hardware gate.
-The boot decision controller itself is now integrated with a deliberately
-read-only backend and host-tested for forced recovery, pending trials,
-sequence-bound application confirmation, immediate rejection, rollback, and
-emergency slot fallback. An opt-in eight-second WDOG1 trial adapter compiles
-in the nonbootable hardware probe but is not wired into the default image.
+The guarded A/B recovery transaction and matching host client are implemented
+under host tests. The complete 64-byte USB HID stack, minimal RT1051 board
+wrapper, boot journal, watchdog handoff, and RAM-resident FlexSPI backend now
+link into an opt-in hardware bootloader. Its startup installs the open vector
+table explicitly, including USB OTG1, before C initialization.
+
+The hardware target is separately gated for USB enumeration and NOR writes.
+It defaults to unassigned USB IDs and a read-only recovery backend. A
+post-link checker verifies the vector table, VTOR initialization, protected
+flash limit, capability marker, complete USB stack, DMA-buffer placement and
+alignment, and ITCM-only flash-busy call graph. These are offline structural
+gates, not evidence that the image is safe to flash. Physical read-only USB
+bring-up, sacrificial-sector NOR testing, and watchdog rollback validation
+remain outstanding.
 The application now has an allocation-free extensible effect registry,
 caller-sized processing chains, validated program/bank catalogs, and a
 generic program selector. Its default five-second navigation gesture

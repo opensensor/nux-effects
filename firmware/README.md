@@ -5,9 +5,10 @@ the root architecture plan.
 
 ## Current status
 
-The current binaries are **offline inspection artifacts only**. They have not
-passed the physical recovery, USB, GPIO, clock, or audio gates and must not be
-flashed to a pedal.
+The default binaries are **offline inspection artifacts only**. An opt-in
+RT1051 hardware bootloader is now structurally bootable and links the complete
+recovery stack, but it has not passed the physical recovery, USB, GPIO,
+FlexSPI, watchdog, or audio gates and must not be flashed to a pedal.
 
 Implemented:
 
@@ -38,6 +39,13 @@ Implemented:
   FlexSPI adapter with an ITCM-only command call graph;
 - a combined, deliberately nonbootable hardware link probe joining the board,
   USB, FlexSPI, recovery, and journal layers;
+- an opt-in hardware bootloader with explicit VTOR installation, complete
+  RT1051 vectors, the W25Q64 probe, the board/USB/FlexSPI adapters, the
+  recovery engine, the boot journal, and the watchdog handoff;
+- separate compile-time gates for USB enumeration and physical NOR mutation,
+  both disabled by default;
+- a post-link hardware checker for vectors, VTOR, protected flash size,
+  capability markers, the complete USB stack, and USB DMA placement;
 - an allocation-free effect registry and caller-sized processing-chain
   runtime with no fixed effect-count limit;
 - stable program and bank descriptors with catalog validation, transactional
@@ -55,9 +63,8 @@ Not implemented:
 - physical validation of the recovered footswitch input wrapper;
 - a project USB VID/PID;
 - physical validation of FlexSPI erase/program on a sacrificial sector;
-- hardware-backed journal mutation and USB recovery entry from
-  `bootloader_main`;
-- target validation and default-boot wiring of watchdog confirmation;
+- target validation of open USB recovery, hardware-backed journal mutation,
+  and watchdog confirmation/rollback;
 - cache/MPU setup;
 - source SEMC initialization;
 - GPIO diagnostics or audio.
@@ -152,6 +159,38 @@ python3 tools/check_hardware_probe.py \
 The checker requires every board/USB/NOR integration symbol while rejecting
 a reset handler or vector table. Passing it is a compile/link gate, not
 permission to flash.
+
+## Build the opt-in hardware bootloader
+
+The bootable RT1051 integration target is excluded from the default build.
+It requires all three MCUX adapters and remains read-only unless physical
+write support is enabled separately:
+
+```sh
+cmake -S firmware -B build/open-hardware-boot -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_MCUX_BOARD_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_USB_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_FLEXSPI_ADAPTER=ON \
+  -DNCR2_BUILD_HARDWARE_BOOTLOADER=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/open-hardware-boot \
+  --target ncr2_hardware_bootloader
+python3 tools/check_hardware_bootloader.py \
+  build/open-hardware-boot/ncr2_hardware_bootloader.elf
+python3 tools/check_ramfunc.py \
+  build/open-hardware-boot/ncr2_hardware_bootloader.elf
+```
+
+With the default zero VID/PID, this target cannot enumerate. USB enumeration
+additionally requires `NCR2_ENABLE_HARDWARE_USB_ENUMERATION=ON` and a
+legitimately assigned non-NUX `NCR2_OPEN_USB_VID`/`NCR2_OPEN_USB_PID`; the
+checker then uses `--expect-usb-stack`. Physical writes require the independent
+`NCR2_HARDWARE_RECOVERY_WRITE_ENABLE=ON` switch and the checker then uses
+`--write-enabled`. Enabling those switches proves link composition only. It
+does not approve the resulting image for hardware.
 
 ## Decode the verified stock boot configuration
 

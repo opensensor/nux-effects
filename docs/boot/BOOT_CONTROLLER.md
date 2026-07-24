@@ -91,10 +91,15 @@ program callbacks intentionally fail. This lets ordinary confirmed-slot
 selection use the tested controller without making the image capable of
 mutating NOR.
 
-The compile-checked FlexSPI, USB, and board adapters remain disconnected from
-the default boot image. The board adapter configures only the two recovered
-early-boot input pads, USB1 clocks/PHY/IRQ, WDOG1, and warm reset. The combined
-nonbootable link probe proves all three adapters resolve together, but
-pending-trial persistence and USB recovery become hardware-approved only
-after the documented target gates pass. Until then, a controller recovery
-decision stops in the bootloader diagnostic loop.
+The default boot image remains disconnected from the FlexSPI, USB, and board
+adapters. A separate opt-in hardware bootloader now connects all three to the
+same controller and installs its vector table explicitly. It is read-only by
+default; USB enumeration and physical NOR mutation require independent build
+switches. The board adapter configures only the two recovered early-boot
+input pads, USB1 clocks/PHY/IRQ, WDOG1, and warm reset.
+
+Passing the post-link hardware checks proves composition, vectors, memory
+placement, and protected-range policy only. Pending-trial persistence and
+USB recovery become hardware-approved only after the documented target gates
+pass. Until then, the default controller recovery decision stops in the
+bootloader diagnostic loop.

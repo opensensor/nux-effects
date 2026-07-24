@@ -15,8 +15,8 @@ class UsbRecoverySafetyTests(unittest.TestCase):
             r"option\(\s*NCR2_BUILD_MCUX_USB_ADAPTER\s+"
             r'"[^"]+"\s+OFF\s*\)',
         )
-        self.assertIn("NCR2_OPEN_USB_VID=0", cmake)
-        self.assertIn("NCR2_OPEN_USB_PID=0", cmake)
+        self.assertIn("set(NCR2_EFFECTIVE_USB_VID 0)", cmake)
+        self.assertIn("set(NCR2_EFFECTIVE_USB_PID 0)", cmake)
 
         adapter = (USB_DIR / "recovery_usb.c").read_text()
         self.assertIn("NCR2_OPEN_USB_VID == 0U", adapter)

@@ -25,8 +25,8 @@ class BoardSupportSafetyTests(unittest.TestCase):
         self.assertNotIn("ncr2_board.c", boot_sources)
         self.assertNotIn("ncr2_watchdog.c", boot_sources)
         self.assertIn("ncr2_hardware_link_probe", cmake)
-        self.assertIn("NCR2_OPEN_USB_VID=0", cmake)
-        self.assertIn("NCR2_OPEN_USB_PID=0", cmake)
+        self.assertIn("set(NCR2_EFFECTIVE_USB_VID 0)", cmake)
+        self.assertIn("set(NCR2_EFFECTIVE_USB_PID 0)", cmake)
 
     def test_recovery_pin_mapping_and_polarity_are_exact(self):
         source = (

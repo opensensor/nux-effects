@@ -21,12 +21,68 @@ option(
     "Compile-check the RT1051 GPIO/USB/reset board adapter"
     OFF
 )
+option(
+    NCR2_BUILD_HARDWARE_BOOTLOADER
+    "Build the unapproved bootable RT1051 recovery integration"
+    OFF
+)
+option(
+    NCR2_HARDWARE_RECOVERY_WRITE_ENABLE
+    "Enable physical NOR mutation in the unapproved hardware bootloader"
+    OFF
+)
+option(
+    NCR2_ENABLE_HARDWARE_USB_ENUMERATION
+    "Allow the hardware bootloader to enumerate with assigned USB IDs"
+    OFF
+)
+set(
+    NCR2_OPEN_USB_VID
+    "0"
+    CACHE STRING
+    "Assigned open-firmware USB VID; ignored unless enumeration is enabled"
+)
+set(
+    NCR2_OPEN_USB_PID
+    "0"
+    CACHE STRING
+    "Assigned open-firmware USB PID; ignored unless enumeration is enabled"
+)
 set(
     NCR2_MCUX_SDK_ROOT
     ""
     CACHE PATH
     "Pinned workspace produced by tools/fetch_mcux_sdk.py"
 )
+
+set(NCR2_EFFECTIVE_USB_VID 0)
+set(NCR2_EFFECTIVE_USB_PID 0)
+if(NCR2_ENABLE_HARDWARE_USB_ENUMERATION)
+    math(EXPR NCR2_USB_VID_VALUE "${NCR2_OPEN_USB_VID}")
+    math(EXPR NCR2_USB_PID_VALUE "${NCR2_OPEN_USB_PID}")
+    if(NCR2_USB_VID_VALUE LESS 1 OR
+       NCR2_USB_VID_VALUE GREATER 65535 OR
+       NCR2_USB_PID_VALUE LESS 1 OR
+       NCR2_USB_PID_VALUE GREATER 65535)
+        message(
+            FATAL_ERROR
+            "USB enumeration requires nonzero 16-bit assigned VID/PID"
+        )
+    endif()
+    if(NCR2_USB_VID_VALUE EQUAL 38183)
+        message(
+            FATAL_ERROR
+            "NUX VID 0x9527 is forbidden for open firmware"
+        )
+    endif()
+    set(NCR2_EFFECTIVE_USB_VID ${NCR2_USB_VID_VALUE})
+    set(NCR2_EFFECTIVE_USB_PID ${NCR2_USB_PID_VALUE})
+endif()
+
+set(NCR2_HARDWARE_WRITE_VALUE 0)
+if(NCR2_HARDWARE_RECOVERY_WRITE_ENABLE)
+    set(NCR2_HARDWARE_WRITE_VALUE 1)
+endif()
 
 set(NCR2_CPU_FLAGS
     -mcpu=cortex-m7
@@ -89,6 +145,7 @@ add_executable(
     bootloader/src/boot_lifecycle.c
     bootloader/src/boot_recovery_request.c
     bootloader/src/bootloader.c
+    bootloader/src/bootloader_offline.c
     bootloader/src/boot_state.c
     bootloader/src/boot_trial.c
     bootloader/src/crc32.c
@@ -152,6 +209,7 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER)
     set(NCR2_USB_OUTPUT "${NCR2_USB_MIDDLEWARE}/output/source/device")
     set(
         NCR2_USB_VENDOR_SOURCES
+        ${NCR2_MCUX_SDK_ROOT}/core/components/osa/fsl_os_abstraction_bm.c
         ${NCR2_USB_MIDDLEWARE}/device/usb_device_ehci.c
         ${NCR2_USB_MIDDLEWARE}/device/usb_device_dci.c
         ${NCR2_USB_MIDDLEWARE}/phy/usb_phy.c
@@ -195,8 +253,9 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER)
             FSL_OSA_BM_TASK_ENABLE=0
             FSL_OSA_BM_TIMER_CONFIG=0
             SDK_OS_BAREMETAL
-            NCR2_OPEN_USB_VID=0
-            NCR2_OPEN_USB_PID=0
+            DATA_SECTION_IS_CACHEABLE=0
+            NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
+            NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
     )
     target_compile_options(
         ncr2_mcux_usb_adapter
@@ -471,8 +530,9 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
             FSL_OSA_BM_TASK_ENABLE=0
             FSL_OSA_BM_TIMER_CONFIG=0
             SDK_OS_BAREMETAL
-            NCR2_OPEN_USB_VID=0
-            NCR2_OPEN_USB_PID=0
+            DATA_SECTION_IS_CACHEABLE=0
+            NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
+            NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
     )
     target_compile_options(
         ncr2_hardware_link_probe
@@ -523,5 +583,111 @@ if(NCR2_BUILD_MCUX_USB_ADAPTER AND
     set_target_properties(
         ncr2_hardware_link_probe
         PROPERTIES SUFFIX ".elf"
+    )
+
+    if(NCR2_BUILD_HARDWARE_BOOTLOADER)
+        add_executable(
+            ncr2_hardware_bootloader
+            EXCLUDE_FROM_ALL
+            bootloader/src/startup.S
+            bootloader/src/boot_controller.c
+            bootloader/src/boot_handoff.c
+            bootloader/src/boot_journal.c
+            bootloader/src/boot_lifecycle.c
+            bootloader/src/boot_recovery_request.c
+            bootloader/src/bootloader.c
+            bootloader/src/bootloader_hardware.c
+            bootloader/src/boot_state.c
+            bootloader/src/boot_trial.c
+            bootloader/src/crc32.c
+            bootloader/src/recovery_engine.c
+            bootloader/src/recovery_protocol.c
+            bootloader/src/recovery_storage.c
+            bootloader/src/sha256.c
+            platform/ncr2/board/ncr2_board.c
+            platform/ncr2/board/ncr2_watchdog.c
+            platform/ncr2/flexspi/ncr2_flexspi_nor.c
+            platform/ncr2/src/ncr2_freestanding.c
+            platform/ncr2/src/ncr2_nor.c
+            platform/ncr2/usb/recovery_usb.c
+            platform/ncr2/usb/recovery_usb_descriptor.c
+            ${NCR2_BOARD_VENDOR_SOURCES}
+            ${NCR2_FLEXSPI_VENDOR_SOURCE}
+            ${NCR2_USB_VENDOR_SOURCES}
+        )
+        target_include_directories(
+            ncr2_hardware_bootloader
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/board
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/flexspi
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/usb
+        )
+        target_include_directories(
+            ncr2_hardware_bootloader
+            SYSTEM PRIVATE
+                ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+                ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+                ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/flexspi
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/igpio
+                ${NCR2_MCUX_SDK_ROOT}/core/drivers/wdog01
+                ${NCR2_MCUX_SDK_ROOT}/core/components/lists
+                ${NCR2_MCUX_SDK_ROOT}/core/components/osa
+                ${NCR2_USB_MIDDLEWARE}/include
+                ${NCR2_USB_MIDDLEWARE}/device
+                ${NCR2_USB_MIDDLEWARE}/phy
+                ${NCR2_USB_OUTPUT}
+                ${NCR2_USB_OUTPUT}/class
+        )
+        target_compile_definitions(
+            ncr2_hardware_bootloader
+            PRIVATE
+                CPU_MIMXRT1051DVL6B
+                USB_STACK_BM
+                FSL_OSA_BM_TASK_ENABLE=0
+                FSL_OSA_BM_TIMER_CONFIG=0
+                SDK_OS_BAREMETAL
+                DATA_SECTION_IS_CACHEABLE=0
+                NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
+                NCR2_OPEN_USB_PID=${NCR2_EFFECTIVE_USB_PID}
+                NCR2_HARDWARE_RECOVERY_WRITE_ENABLE=${NCR2_HARDWARE_WRITE_VALUE}
+        )
+        ncr2_firmware_target(
+            ncr2_hardware_bootloader
+            ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/ncr2_bootloader.ld
+        )
+        target_link_options(
+            ncr2_hardware_bootloader
+            PRIVATE
+                -Wl,-n
+                -Wl,--undefined=USB_OTG1_IRQHandler
+        )
+        if(NCR2_HARDWARE_RECOVERY_WRITE_ENABLE)
+            target_link_options(
+                ncr2_hardware_bootloader
+                PRIVATE
+                    -Wl,--undefined=ncr2_hardware_recovery_write_enabled
+            )
+        else()
+            target_link_options(
+                ncr2_hardware_bootloader
+                PRIVATE
+                    -Wl,--undefined=ncr2_hardware_recovery_readonly
+            )
+        endif()
+    endif()
+endif()
+
+if(NCR2_BUILD_HARDWARE_BOOTLOADER AND
+   NOT (NCR2_BUILD_MCUX_USB_ADAPTER AND
+        NCR2_BUILD_MCUX_FLEXSPI_ADAPTER AND
+        NCR2_BUILD_MCUX_BOARD_ADAPTER))
+    message(
+        FATAL_ERROR
+        "NCR2_BUILD_HARDWARE_BOOTLOADER requires all three MCUX adapters"
     )
 endif()

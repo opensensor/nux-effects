@@ -42,6 +42,7 @@ bare-metal image uses:
 - EHCI controller 0 / USB OTG1;
 - the 480 MHz USB PHY PLL;
 - `usb_device_ehci.c`, `usb_device_dci.c`, and `usb_phy.c`;
+- the bare-metal OSA implementation used by the device controller;
 - HID class, Chapter 9, and class-dispatch sources;
 - interrupt IN endpoint 1 and OUT endpoint 2;
 - two DMA-aligned receive buffers; and
@@ -70,11 +71,12 @@ The compile-checked open recovery adapter changes the example from 8-byte
 reports to the repository's 64-byte `NXFX` packets. It:
 
 - refuses to start while its VID/PID are unassigned and refuses NUX's VID;
-- disable ROOT2/compliance/debug-console features;
-- dispatch each completed OUT report to `recovery_engine_process`;
-- send the exact returned 64-byte response on endpoint 1;
-- immediately re-arm endpoint 2 for the next request; and
-- place both DMA buffers in an aligned, non-cacheable OCRAM section.
+- disables ROOT2/compliance/debug-console features;
+- dispatches each completed OUT report to `recovery_engine_process`;
+- sends the exact returned 64-byte response on endpoint 1;
+- immediately re-arms endpoint 2 for the next request; and
+- places the USB DMA objects in aligned DTCM while compiling the vendor stack
+  with `DATA_SECTION_IS_CACHEABLE=0`.
 
 The adapter and the pinned vendor sources compile for the exact
 `MIMXRT1051DVL6B` target with:
@@ -135,6 +137,12 @@ source-controlled MPU/cache setup:
 
 USB recovery itself does not require SDRAM. Keeping the recovery stack and
 buffers in on-chip RAM allows recovery even if SEMC validation later fails.
+The RT1050 Cortex-M7 exposes its tightly coupled memories to system DMA
+masters through the AHBS interface, as documented in
+[NXP AN12077](https://www.nxp.com/docs/en/application-note/AN12077.pdf), and
+NXP's pinned RT1050 generic-HID example uses this same DTCM placement. OCRAM
+remains an option if later multi-master measurements justify moving the
+buffers.
 
 ## FlexSPI write constraint
 
@@ -186,11 +194,11 @@ python3 tools/check_ramfunc.py \
   build/open-flexspi/ncr2_flexspi_link_probe.elf
 ```
 
-This remains an offline gate. `bootloader_main` now uses the host-tested boot
-controller, but supplies it a deliberately read-only XIP journal backend.
-The MCUX FlexSPI adapter is still not wired to that controller or the USB
-recovery engine, and no erase/program command has been issued to the physical
-pedal.
+This remains an offline gate. The default `bootloader_main` uses the
+host-tested controller with a deliberately read-only XIP journal backend.
+The opt-in hardware bootloader described below wires the MCUX FlexSPI adapter
+to the controller and recovery engine, but also defaults to read-only. No
+erase/program command has been issued to the physical pedal.
 
 ## Combined hardware integration probe
 
@@ -219,6 +227,53 @@ This ELF intentionally has no vector table or reset handler, and its entry is
 the recovery-input initializer rather than a reset path. The checker rejects
 any accidental boot structure while requiring all integration symbols. It
 proves source completeness only; it is not a flashable image.
+
+## Opt-in bootable integration
+
+`ncr2_hardware_bootloader` is an `EXCLUDE_FROM_ALL` target that joins the
+same integration graph to the real reset/vector path. Startup installs
+`g_boot_vectors` into `SCB->VTOR`, executes `DSB`/`ISB`, copies `.ramfunc`,
+and then enters the shared boot controller. The hardware services provide:
+
+- exact early-recovery GPIO sampling;
+- a W25Q64 JEDEC probe;
+- read-only or explicitly write-enabled recovery storage and journal
+  callbacks;
+- pending-trial WDOG1 handoff and warm reset; and
+- optional USB1 HID recovery entry.
+
+Build the default read-only, non-enumerating form with:
+
+```sh
+cmake -S firmware -B build/open-hardware-boot -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_MCUX_BOARD_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_USB_ADAPTER=ON \
+  -DNCR2_BUILD_MCUX_FLEXSPI_ADAPTER=ON \
+  -DNCR2_BUILD_HARDWARE_BOOTLOADER=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/open-hardware-boot \
+  --target ncr2_hardware_bootloader
+python3 tools/check_hardware_bootloader.py \
+  build/open-hardware-boot/ncr2_hardware_bootloader.elf
+python3 tools/check_ramfunc.py \
+  build/open-hardware-boot/ncr2_hardware_bootloader.elf
+```
+
+Enumeration is a separate gate:
+`NCR2_ENABLE_HARDWARE_USB_ENUMERATION=ON` requires nonzero, assigned
+`NCR2_OPEN_USB_VID` and `NCR2_OPEN_USB_PID` values and rejects NUX's VID. A
+linked enumerating image is checked with `--expect-usb-stack`, which
+additionally requires the EHCI/DCI/HID symbols and validates every known USB
+DMA object against the DTCM bounds and required alignment.
+
+Physical recovery writes are another independent gate,
+`NCR2_HARDWARE_RECOVERY_WRITE_ENABLE=ON`, and add the
+`--write-enabled` checker expectation. Neither option is permission to
+flash. The full read-only and write-enabled graphs have only been built and
+inspected offline.
 
 ## Next hardware gates
 

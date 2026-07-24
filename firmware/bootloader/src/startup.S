@@ -28,6 +28,17 @@ g_boot_vectors:
 .type Reset_Handler, %function
 .thumb_func
 Reset_Handler:
+    /*
+     * The ROM enters through the image vector table but does not form part
+     * of our interrupt-routing contract. Install the table explicitly
+     * before any board adapter can enable a peripheral interrupt.
+     */
+    ldr r0, =0xE000ED08
+    ldr r1, =g_boot_vectors
+    str r1, [r0]
+    dsb
+    isb
+
     ldr r0, =__ramfunc_load
     ldr r1, =__ramfunc_start
     ldr r2, =__ramfunc_end

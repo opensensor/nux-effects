@@ -2,7 +2,9 @@
 
 Status: packet, range-validation, retry-cache, update transaction, metadata
 journal, and trial/confirmation policy layers implemented and host-tested.
-USB transport and FlexSPI operations are not yet connected on hardware.
+An opt-in hardware target links the USB transport and FlexSPI backend end to
+end, read-only and non-enumerating by default. It has not yet been executed
+on the pedal.
 
 ## Transport
 

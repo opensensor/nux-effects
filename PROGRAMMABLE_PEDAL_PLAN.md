@@ -688,9 +688,10 @@ the C ABI between bootloader, platform, and application.
 Do not replace the bootloader yet. The repository, pinned SDK, guarded image
 packer, A/B policy, open recovery protocol, USB adapter, RAM-resident NOR
 adapter, and minimal RT1051 board adapter now exist and pass their offline
-gates. The combined integration is deliberately linked without a reset
-vector so it cannot be mistaken for a hardware-approved boot image. The next
-implementation session should:
+gates. An opt-in hardware target now links them into a structurally bootable
+image with explicit VTOR setup, complete vectors, separate enumeration/write
+switches, and post-link memory/symbol checks. It is still not a
+hardware-approved boot image. The next implementation session should:
 
 1. Assign a legitimate non-NUX USB development VID/PID.
 2. Build a RAM/debug recovery image and validate only early input sampling,

@@ -4,6 +4,7 @@
 #include "boot_controller.h"
 #include "boot_handoff.h"
 #include "boot_recovery_request.h"
+#include "bootloader_runtime.h"
 #include "boot_trial.h"
 #include "crc32.h"
 #include "ncr2_flash_layout.h"
@@ -171,49 +172,6 @@ static uint16_t load_slot(void *context, uint8_t slot)
     return BOOT_CONTROLLER_SLOT_INVALID;
 }
 
-static int metadata_read(void *context,
-                         uint32_t address,
-                         void *destination,
-                         uint32_t length)
-{
-    const uint8_t *source =
-        (const uint8_t *)(uintptr_t)address;
-    uint8_t *output = (uint8_t *)destination;
-
-    (void)context;
-    if (destination == NULL) {
-        return -1;
-    }
-    for (uint32_t index = 0U; index < length; ++index) {
-        output[index] = source[index];
-    }
-    return 0;
-}
-
-static int metadata_mutation_disabled(
-    void *context,
-    uint32_t address,
-    uint32_t length)
-{
-    (void)context;
-    (void)address;
-    (void)length;
-    return -1;
-}
-
-static int metadata_program_disabled(
-    void *context,
-    uint32_t address,
-    const void *source,
-    uint32_t length)
-{
-    (void)context;
-    (void)address;
-    (void)source;
-    (void)length;
-    return -1;
-}
-
 static int recovery_requested(void *context)
 {
     boot_runtime_context_t *runtime =
@@ -260,56 +218,51 @@ static void jump_to_application(void)
     }
 }
 
-void bootloader_main(void)
+__attribute__((noreturn))
+void bootloader_run(
+    bootloader_runtime_services_t *platform)
 {
-    boot_journal_backend_t journal = {
-        .context = NULL,
-        .read = metadata_read,
-        .erase = metadata_mutation_disabled,
-        .program = metadata_program_disabled,
-    };
-    boot_runtime_context_t runtime = {
-        .recovery = {
-            .mailbox =
-                (boot_recovery_mailbox_t *)(uintptr_t)
-                    NCR2_BOOT_MAILBOX_ADDRESS,
-            .physical_context = NULL,
-            .physical_asserted = NULL,
-        },
-        .trial =
-            (boot_trial_mailbox_t *)(uintptr_t)
-                NCR2_BOOT_TRIAL_MAILBOX_ADDRESS,
-    };
-    boot_controller_services_t services = {
-        .journal = &journal,
-        .metadata_address =
-            NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET,
-        .context = &runtime,
-        .recovery_requested = recovery_requested,
-        .consume_confirmation = consume_confirmation,
-        .load_slot = load_slot,
-    };
+    boot_runtime_context_t runtime;
+    boot_controller_services_t services;
     boot_controller_result_t result;
-    boot_handoff_services_t handoff = {
-        .trial_mailbox = runtime.trial,
-        .watchdog_context = NULL,
-        .start_trial_watchdog = NULL,
-    };
+    boot_handoff_services_t handoff;
 
     g_boot_diagnostic = BOOT_DIAGNOSTIC_RESET;
+    if (platform == NULL ||
+        platform->journal == NULL ||
+        platform->trial_mailbox == NULL) {
+        g_boot_diagnostic = BOOT_DIAGNOSTIC_RECOVERY;
+        for (;;) {
+            __asm volatile("wfi");
+        }
+    }
+
+    runtime.recovery = platform->recovery;
+    runtime.trial = platform->trial_mailbox;
+    services.journal = platform->journal;
+    services.metadata_address =
+        NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET;
+    services.context = &runtime;
+    services.recovery_requested = recovery_requested;
+    services.consume_confirmation = consume_confirmation;
+    services.load_slot = load_slot;
+    handoff.trial_mailbox = runtime.trial;
+    handoff.watchdog_context = platform->watchdog_context;
+    handoff.start_trial_watchdog =
+        platform->start_trial_watchdog;
+
     boot_controller_run(&services, &result);
     if (result.action == BOOT_CONTROLLER_HANDOFF) {
         (void)boot_handoff_prepare(&handoff, &result);
         jump_to_application();
     }
 
-    /*
-     * The controller now reaches a real recovery decision, but the USB
-     * board wrapper and physical input remain deliberately unlinked.
-     * Until both are verified, recovery stops here and this binary must
-     * not be flashed.
-     */
     g_boot_diagnostic = BOOT_DIAGNOSTIC_RECOVERY;
+    if (platform->enter_recovery != NULL) {
+        platform->enter_recovery(
+            platform->recovery_context,
+            &result);
+    }
     for (;;) {
         __asm volatile("wfi");
     }
