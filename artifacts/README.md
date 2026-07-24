@@ -79,7 +79,7 @@ The repository root contains the primary operational artifacts:
 - `tools/nux_dfu.py`: guarded Linux HID-DFU host utility;
 - `DFU_PROTOCOL.md`: recovered protocol and live-validation notes;
 - `PROGRAMMABLE_PEDAL_PLAN.md`: source-level open bootloader, A/B updater,
-  board-support, audio, four-mode DSP, and hardware-validation plan; and
+  board-support, audio, extensible DSP, and hardware-validation plan; and
 - `ghidra/`: durable Ghidra analysis scripts.
 
 The global `SHA256SUMS` file in the repository root covers every preserved
@@ -96,3 +96,28 @@ post-transfer query:  ENG3TEST
 normal boot:          successful
 audio result:         functioning ENG3 overdrive/amp pedal
 ```
+
+## Current source passthrough candidate
+
+The ignored local directory `build/factory-candidate/` contains the first
+combined source audio/GPIO artifact. It is deliberately named
+`NOT-FOR-FLASH` until the two remaining candidate control pins are identified
+electrically:
+
+```text
+ncr2_factory_slot_app.elf
+83efd0dedcd3940ff7dc63e03c6b27f9ab56fa348ebe93e2937d91c51fd47922
+
+ncr2_factory_slot_app.bin
+4026ba5538d0a4fdc067f8d1c293841e09b05bd1211ef4e274af5e4651b5b93b
+
+package/source-passthrough-gpio-NOT-FOR-FLASH.bina
+12ad4c51ee01c58f35a0e81a4feb0b3e7697e579c579bae6947b191ab8b89827
+
+package/metal-restore.bina
+bb7f1713268e6fcc7b656c572af9674c28a74ce1f37a48708ba2ad1511dfb868
+```
+
+The restore package is byte-identical to the live-tested
+`eng3-slot1.bina`. Both BINA streams map only `0x60000..0x9ffff`; packaging
+and report expansion were performed offline and nothing was sent to USB.
