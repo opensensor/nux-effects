@@ -8,6 +8,9 @@
 #define RECOVERY_PACKET_SIZE 64U
 #define RECOVERY_PAYLOAD_SIZE 32U
 
+#define RECOVERY_FLAG_SLOT_MASK UINT16_C(0x0001)
+#define RECOVERY_FLAG_ALLOWED_MASK RECOVERY_FLAG_SLOT_MASK
+
 enum recovery_command {
     RECOVERY_COMMAND_GET_INFO = 1,
     RECOVERY_COMMAND_BEGIN_IMAGE = 2,
@@ -32,6 +35,13 @@ enum recovery_status {
     RECOVERY_STATUS_BAD_SEQUENCE = 8,
     RECOVERY_STATUS_BAD_SLOT = 9,
     RECOVERY_STATUS_RANGE_DENIED = 10,
+    RECOVERY_STATUS_BACKEND_ERROR = 11,
+    RECOVERY_STATUS_INVALID_STATE = 12,
+    RECOVERY_STATUS_IMAGE_INVALID = 13,
+    RECOVERY_STATUS_ACTIVE_SLOT = 14,
+    RECOVERY_STATUS_NOT_FINALIZED = 15,
+    RECOVERY_STATUS_BAD_FLAGS = 16,
+    RECOVERY_STATUS_WRITE_ORDER = 17,
 };
 
 typedef struct __attribute__((packed)) recovery_packet {
@@ -64,4 +74,3 @@ uint16_t recovery_resolve_range(uint8_t slot,
                                 uint32_t *flash_address);
 
 #endif
-

@@ -17,6 +17,8 @@ The current architecture and phased bring-up plan are in
 HID updater protocol is documented in [DFU_PROTOCOL.md](DFU_PROTOCOL.md).
 The offline source boot chain and build instructions are in
 [firmware/README.md](firmware/README.md).
+The independent open recovery wire format is documented in
+[docs/protocol/OPEN_RECOVERY_PROTOCOL.md](docs/protocol/OPEN_RECOVERY_PROTOCOL.md).
 
 ## Current hardware facts
 
@@ -59,3 +61,6 @@ proving the shared Core Deluxe platform and the USB deployment path.
 
 Development is now moving to an independent bootloader, board-support
 package, deterministic audio engine, and original/open DSP implementations.
+The guarded A/B recovery transaction and matching host client are now
+implemented under host tests; USB and FlexSPI hardware integration remain
+behind the no-flash hardware gate.

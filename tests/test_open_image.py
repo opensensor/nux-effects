@@ -129,6 +129,24 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(open_image.ImageError):
             open_image.parse_manifest(bytes(sector), layout=self.layout)
 
+    def test_slot_image_is_manifest_then_exact_payload(self):
+        slot_image = open_image.build_slot_image(
+            self.application,
+            layout=self.layout,
+            semantic_version=open_image.parse_semantic_version("1.2.3"),
+            build_number=19,
+        )
+        self.assertEqual(
+            slot_image[self.layout.manifest_size :],
+            self.application,
+        )
+        manifest = open_image.parse_manifest(
+            slot_image[: self.layout.manifest_size],
+            layout=self.layout,
+        )
+        open_image.validate_vector(self.application, manifest)
+        self.assertEqual(manifest.image_size, len(self.application))
+
 
 class FullImageTests(unittest.TestCase):
     def setUp(self):

@@ -17,6 +17,7 @@ third_party/
 zero_wear/build/
 zero_wear/build-*/
 *.elf
+*.slot
 *.o
 *.map
 *.disasm.txt

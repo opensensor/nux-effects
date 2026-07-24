@@ -15,8 +15,11 @@ Implemented:
 - bootloader linked at the stock `0x60002000` vector address;
 - application linked for a slot-independent SDRAM load at `0x80000000`;
 - application manifest with header CRC32 and payload SHA-256;
-- slot A validation with slot B fallback;
+- journaled A/B boot-state format and slot selection with fallback;
 - vector, stack, size, board, and load-address checks;
+- range-confined 64-byte open recovery packet format;
+- host-tested inactive-slot update transaction and retry behavior;
+- `pedalctl.py` host packet/client implementation;
 - a guarded full-chip packer that starts from the verified factory dump;
 - exact preservation checks for the stock boot header and factory region.
 
@@ -25,7 +28,7 @@ Not implemented:
 - footswitch recovery input;
 - USB recovery transport;
 - FlexSPI erase/program routines;
-- A/B trial-boot metadata;
+- boot-state journal persistence through the flash backend;
 - watchdog confirmation and rollback;
 - cache/MPU setup;
 - source SEMC initialization;
@@ -54,6 +57,10 @@ python3 tools/fetch_mcux_sdk.py
 
 The current boot skeleton deliberately needs no vendor headers, which keeps
 image-format and recovery logic host-testable.
+
+The pinned RT1050 vendor HID example was also built successfully from this
+workspace. The exact integration delta for the real RT1051 pedal is recorded
+in [MCUX_SDK_INTEGRATION.md](../docs/hardware/MCUX_SDK_INTEGRATION.md).
 
 ## Decode the verified stock boot configuration
 
@@ -93,3 +100,22 @@ show:
 - application A valid;
 - application B erased; and
 - no changed partition outside bootloader, metadata, and application slots.
+
+## Build and inspect an A/B slot image
+
+The open updater transmits one contiguous manifest-plus-payload slot image:
+
+```sh
+python3 tools/open_image.py pack-slot \
+  --application build/open/ncr2_app.bin \
+  --version 0.1.0 \
+  --build-number 1 \
+  --output build/open/ncr2-app-0.1.0.slot
+
+python3 tools/pedalctl.py inspect-slot \
+  build/open/ncr2-app-0.1.0.slot
+```
+
+`pedalctl.py upload` exists for protocol simulation and future hardware use,
+but there is no approved open bootloader on the pedal yet. Do not point it at
+the stock NUX recovery device: the protocols are intentionally unrelated.

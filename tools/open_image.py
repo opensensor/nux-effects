@@ -243,6 +243,26 @@ def build_manifest(
     )
 
 
+def build_slot_image(
+    payload: bytes,
+    *,
+    layout: Layout,
+    semantic_version: int,
+    build_number: int,
+) -> bytes:
+    """Build the exact contiguous bytes written to one open A/B slot."""
+    manifest = build_manifest(
+        payload,
+        layout=layout,
+        semantic_version=semantic_version,
+        build_number=build_number,
+    )
+    result = manifest + payload
+    if len(result) > layout.region("application_a").size:
+        raise AssertionError("validated slot image exceeds its partition")
+    return result
+
+
 def parse_manifest(data: bytes, *, layout: Layout) -> Manifest:
     if len(data) < layout.manifest_size:
         raise ImageError("manifest sector is truncated")
@@ -866,6 +886,32 @@ def command_pack(args: argparse.Namespace) -> None:
     )
 
 
+def command_pack_slot(args: argparse.Namespace) -> None:
+    layout = load_layout(args.layout)
+    payload = args.application.read_bytes()
+    image = build_slot_image(
+        payload,
+        layout=layout,
+        semantic_version=parse_semantic_version(args.version),
+        build_number=args.build_number,
+    )
+    manifest = parse_manifest(image[: layout.manifest_size], layout=layout)
+    validate_vector(image[layout.manifest_size :], manifest)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_bytes(image)
+    print_json(
+        {
+            "output": str(args.output),
+            "output_size": len(image),
+            "output_sha256": sha256(image),
+            "payload_size": manifest.image_size,
+            "payload_sha256": manifest.image_sha256.hex(),
+            "version": format_semantic_version(manifest.semantic_version),
+            "build_number": manifest.build_number,
+        }
+    )
+
+
 def command_inspect(args: argparse.Namespace) -> None:
     print_json(
         inspect_full_image(
@@ -915,6 +961,16 @@ def build_parser() -> argparse.ArgumentParser:
     pack_parser.add_argument("--output", type=path, required=True)
     pack_parser.add_argument("--report", type=path, required=True)
     pack_parser.set_defaults(function=command_pack)
+
+    slot_parser = subparsers.add_parser(
+        "pack-slot",
+        help="build a manifest plus application payload for open recovery",
+    )
+    slot_parser.add_argument("--application", type=path, required=True)
+    slot_parser.add_argument("--version", required=True)
+    slot_parser.add_argument("--build-number", type=int, required=True)
+    slot_parser.add_argument("--output", type=path, required=True)
+    slot_parser.set_defaults(function=command_pack_slot)
 
     inspect_parser = subparsers.add_parser(
         "inspect", help="validate manifests in a full-chip image"

@@ -1,7 +1,8 @@
 # Open NCR-2 recovery protocol
 
-Status: packet and range-validation layer implemented; USB transport and flash
-operations are not yet connected.
+Status: packet, range-validation, retry-cache, and update transaction layers
+implemented and host-tested. USB transport, FlexSPI operations, and metadata
+journal writes are not yet connected on hardware.
 
 ## Transport
 
@@ -52,6 +53,26 @@ handling. Every subsequent session command must match the nonce and exact
 expected sequence. Retries receive the prior response; skipped or reordered
 commands are rejected.
 
+The low bit of `flags` selects slot A (`0`) or B (`1`). All other flag bits
+are currently invalid. `GET_INFO` uses zero flags. The target selected by
+`BEGIN_IMAGE` must be different from both the confirmed and active slot.
+
+`WRITE_CHUNK` carries `1..32` payload bytes. Its `offset` must equal the end
+of the previous successful write, which makes the transfer contiguous and
+prevents holes. `READ_CHUNK` uses `length` as the requested read size and
+sends that many zero payload bytes so both request CRCs remain unambiguous.
+
+`FINALIZE_IMAGE` re-reads the manifest and payload through the flash backend,
+then independently validates:
+
+- manifest magic, version, size, board, load address, and CRC32;
+- DTCM initial stack alignment/range;
+- Thumb reset vector within the loaded image; and
+- SHA-256 of the complete stored payload.
+
+`SET_PENDING` is rejected until all those checks pass. A byte received over
+USB is never trusted merely because its transfer was acknowledged.
+
 ## Address safety
 
 Host offsets are always relative to an explicitly selected application slot.
@@ -93,3 +114,34 @@ startup. Exhausted trials roll back to the last confirmed slot.
 No metadata record is written until `FINALIZE_IMAGE` has independently
 validated the complete inactive slot.
 
+## Host tooling
+
+Build a validated slot stream:
+
+```sh
+python3 tools/open_image.py pack-slot \
+  --application build/open/ncr2_app.bin \
+  --version 0.1.0 \
+  --build-number 1 \
+  --output build/open/ncr2-app-0.1.0.slot
+```
+
+Offline inspection is safe now:
+
+```sh
+python3 tools/pedalctl.py inspect-slot \
+  build/open/ncr2-app-0.1.0.slot
+```
+
+The `info` and `upload` commands are implemented against `hidraw`, including
+exact retries, sequence checking, inactive-slot selection, finalization, and
+pending activation. They must not be used until the matching open recovery
+firmware and a non-NUX USB identity are running on the pedal.
+
+## Status values
+
+In addition to packet-format errors, the engine reports explicit failures for
+backend I/O, invalid transaction phase, invalid image, active-slot selection,
+premature activation, unsupported flags, and out-of-order writes. Failed
+commands do not consume a sequence number, so the host can correct or retry
+the same step.
