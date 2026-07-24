@@ -66,15 +66,37 @@ must not leak into the pedal build. The SDK includes a dedicated RT1051 CMSIS
 device and startup definition, so there is no reason to compile the final
 BSP as RT1052.
 
-The open recovery descriptor will change the example from 8-byte reports to
-the repository's 64-byte `NXFX` packets. It will also:
+The compile-checked open recovery adapter changes the example from 8-byte
+reports to the repository's 64-byte `NXFX` packets. It:
 
-- use a project-assigned development/community VID/PID, never NUX's identity;
+- refuses to start while its VID/PID are unassigned and refuses NUX's VID;
 - disable ROOT2/compliance/debug-console features;
 - dispatch each completed OUT report to `recovery_engine_process`;
 - send the exact returned 64-byte response on endpoint 1;
 - immediately re-arm endpoint 2 for the next request; and
 - place both DMA buffers in an aligned, non-cacheable OCRAM section.
+
+The adapter and the pinned vendor sources compile for the exact
+`MIMXRT1051DVL6B` target with:
+
+```sh
+python3 tools/fetch_mcux_sdk.py
+
+cmake -S firmware -B build/open-usb -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_MCUX_USB_ADAPTER=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/open-usb --target ncr2_mcux_usb_adapter
+```
+
+This is deliberately an object-library compile gate, not a flashable image.
+The board-specific USB clock, PHY initialization, interrupt-vector wrapper,
+MPU setup, and a flash backend must be completed before it is linked into
+the recovery boot path. With the default compile definitions, the adapter's
+VID and PID are zero and `ncr2_recovery_usb_start` returns
+`NCR2_RECOVERY_USB_UNASSIGNED_ID`; it cannot enumerate accidentally.
 
 ## Clock, MPU, and memory requirements
 
@@ -112,10 +134,11 @@ application partition before the backend is called.
 
 Before any full-chip open image is approved:
 
-1. enumerate the open HID stack from a RAM/debug build;
-2. prove GET_INFO without any flash mutation;
-3. identify and test the physical recovery footswitch from source;
-4. erase/program/read back a sacrificial sector in an open application slot;
-5. persist and scan boot-state records across interrupted writes;
-6. validate pending-trial rollback with a watchdog; and
-7. retain the external programmer recovery procedure throughout.
+1. assign a legitimate project/community USB identity;
+2. enumerate the open HID stack from a RAM/debug build;
+3. prove GET_INFO without any flash mutation;
+4. identify and test the physical recovery footswitch from source;
+5. erase/program/read back a sacrificial sector in an open application slot;
+6. persist and scan boot-state records across interrupted writes;
+7. validate pending-trial rollback with a watchdog; and
+8. retain the external programmer recovery procedure throughout.

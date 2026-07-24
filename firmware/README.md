@@ -22,13 +22,14 @@ Implemented:
 - range-confined 64-byte open recovery packet format;
 - host-tested inactive-slot update transaction and retry behavior;
 - `pedalctl.py` host packet/client implementation;
+- a compile-checked RT1051 EHCI/HID adapter for 64-byte `NXFX` reports;
 - a guarded full-chip packer that starts from the verified factory dump;
 - exact preservation checks for the stock boot header and factory region.
 
 Not implemented:
 
 - footswitch recovery input;
-- USB recovery transport;
+- USB clock/PHY/IRQ board wrapper and a project USB VID/PID;
 - FlexSPI erase/program routines;
 - boot-state journal wiring to the hardware flash backend;
 - watchdog confirmation and rollback;
@@ -63,6 +64,23 @@ image-format and recovery logic host-testable.
 The pinned RT1050 vendor HID example was also built successfully from this
 workspace. The exact integration delta for the real RT1051 pedal is recorded
 in [MCUX_SDK_INTEGRATION.md](../docs/hardware/MCUX_SDK_INTEGRATION.md).
+
+The optional RT1051 adapter itself can be compile-checked after fetching the
+pinned workspace:
+
+```sh
+cmake -S firmware -B build/open-usb -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_MCUX_USB_ADAPTER=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/open-usb --target ncr2_mcux_usb_adapter
+```
+
+This target only produces objects. It defaults to an unassigned VID/PID and
+the adapter refuses to start, so it is not an enumerating or flashable
+recovery image.
 
 ## Decode the verified stock boot configuration
 

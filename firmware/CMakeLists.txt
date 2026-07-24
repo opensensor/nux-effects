@@ -6,6 +6,18 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+option(
+    NCR2_BUILD_MCUX_USB_ADAPTER
+    "Compile-check the RT1051 open recovery USB adapter"
+    OFF
+)
+set(
+    NCR2_MCUX_SDK_ROOT
+    ""
+    CACHE PATH
+    "Pinned workspace produced by tools/fetch_mcux_sdk.py"
+)
+
 set(NCR2_CPU_FLAGS
     -mcpu=cortex-m7
     -mthumb
@@ -97,3 +109,84 @@ ncr2_firmware_target(
     ncr2_app
     ${CMAKE_CURRENT_SOURCE_DIR}/app/ncr2_app.ld
 )
+
+if(NCR2_BUILD_MCUX_USB_ADAPTER)
+    if(NOT EXISTS
+       "${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/MIMXRT1051.h")
+        message(
+            FATAL_ERROR
+            "NCR2_MCUX_SDK_ROOT is not a pinned MCUX SDK workspace"
+        )
+    endif()
+
+    set(NCR2_USB_MIDDLEWARE "${NCR2_MCUX_SDK_ROOT}/middleware/usb")
+    set(NCR2_USB_OUTPUT "${NCR2_USB_MIDDLEWARE}/output/source/device")
+    set(
+        NCR2_USB_VENDOR_SOURCES
+        ${NCR2_USB_MIDDLEWARE}/device/usb_device_ehci.c
+        ${NCR2_USB_MIDDLEWARE}/device/usb_device_dci.c
+        ${NCR2_USB_MIDDLEWARE}/phy/usb_phy.c
+        ${NCR2_USB_OUTPUT}/usb_device_ch9.c
+        ${NCR2_USB_OUTPUT}/class/usb_device_class.c
+        ${NCR2_USB_OUTPUT}/class/usb_device_hid.c
+    )
+    add_library(
+        ncr2_mcux_usb_adapter
+        OBJECT
+        platform/ncr2/usb/recovery_usb.c
+        platform/ncr2/usb/recovery_usb_descriptor.c
+        ${NCR2_USB_VENDOR_SOURCES}
+    )
+    target_include_directories(
+        ncr2_mcux_usb_adapter
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/usb
+    )
+    target_include_directories(
+        ncr2_mcux_usb_adapter
+        SYSTEM PRIVATE
+            ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/drivers
+            ${NCR2_MCUX_SDK_ROOT}/core/drivers/common
+            ${NCR2_MCUX_SDK_ROOT}/core/components/lists
+            ${NCR2_MCUX_SDK_ROOT}/core/components/osa
+            ${NCR2_USB_MIDDLEWARE}/include
+            ${NCR2_USB_MIDDLEWARE}/device
+            ${NCR2_USB_MIDDLEWARE}/phy
+            ${NCR2_USB_OUTPUT}
+            ${NCR2_USB_OUTPUT}/class
+    )
+    target_compile_definitions(
+        ncr2_mcux_usb_adapter
+        PRIVATE
+            CPU_MIMXRT1051DVL6B
+            USB_STACK_BM
+            FSL_OSA_BM_TASK_ENABLE=0
+            FSL_OSA_BM_TIMER_CONFIG=0
+            SDK_OS_BAREMETAL
+            NCR2_OPEN_USB_VID=0
+            NCR2_OPEN_USB_PID=0
+    )
+    target_compile_options(
+        ncr2_mcux_usb_adapter
+        PRIVATE
+            ${NCR2_CPU_FLAGS}
+            -ffreestanding
+            -fno-builtin
+            -fdata-sections
+            -ffunction-sections
+            -fno-common
+            -Wall
+            -Wextra
+            -Werror
+            -Wconversion
+            -Wshadow
+            -Wundef
+    )
+    set_source_files_properties(
+        ${NCR2_USB_VENDOR_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-w"
+    )
+endif()

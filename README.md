@@ -62,5 +62,6 @@ proving the shared Core Deluxe platform and the USB deployment path.
 Development is now moving to an independent bootloader, board-support
 package, deterministic audio engine, and original/open DSP implementations.
 The guarded A/B recovery transaction and matching host client are now
-implemented under host tests; USB and FlexSPI hardware integration remain
-behind the no-flash hardware gate.
+implemented under host tests. The 64-byte USB HID adapter now compile-checks
+against the pinned RT1051 MCUX SDK; board clock/IRQ integration and the
+RAM-resident FlexSPI backend remain behind the no-flash hardware gate.
