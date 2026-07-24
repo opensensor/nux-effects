@@ -16,6 +16,8 @@ Implemented:
 - application linked for a slot-independent SDRAM load at `0x80000000`;
 - application manifest with header CRC32 and payload SHA-256;
 - journaled A/B boot-state format and slot selection with fallback;
+- power-loss-safe two-sector journal append/rotation layer;
+- three-attempt pending boot, explicit confirmation, and rollback policy;
 - vector, stack, size, board, and load-address checks;
 - range-confined 64-byte open recovery packet format;
 - host-tested inactive-slot update transaction and retry behavior;
@@ -28,7 +30,7 @@ Not implemented:
 - footswitch recovery input;
 - USB recovery transport;
 - FlexSPI erase/program routines;
-- boot-state journal persistence through the flash backend;
+- boot-state journal wiring to the hardware flash backend;
 - watchdog confirmation and rollback;
 - cache/MPU setup;
 - source SEMC initialization;

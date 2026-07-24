@@ -61,6 +61,8 @@ endfunction()
 add_executable(
     ncr2_bootloader
     bootloader/src/startup.S
+    bootloader/src/boot_journal.c
+    bootloader/src/boot_lifecycle.c
     bootloader/src/bootloader.c
     bootloader/src/boot_state.c
     bootloader/src/crc32.c

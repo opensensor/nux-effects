@@ -1,8 +1,8 @@
 # Open NCR-2 recovery protocol
 
-Status: packet, range-validation, retry-cache, and update transaction layers
-implemented and host-tested. USB transport, FlexSPI operations, and metadata
-journal writes are not yet connected on hardware.
+Status: packet, range-validation, retry-cache, update transaction, metadata
+journal, and trial/confirmation policy layers implemented and host-tested.
+USB transport and FlexSPI operations are not yet connected on hardware.
 
 ## Transport
 
@@ -113,6 +113,18 @@ startup. Exhausted trials roll back to the last confirmed slot.
 
 No metadata record is written until `FINALIZE_IMAGE` has independently
 validated the complete inactive slot.
+
+Metadata uses two 4 KiB sectors of 32-byte append-only records. A partially
+programmed record has no valid CRC and is ignored. When the active sector is
+full, the next state is programmed and verified in the other sector before
+the old sector is erased. If power fails—or cleanup erase fails—both sectors
+are scanned and the newer valid sequence wins.
+
+Pending images receive exactly three recorded attempts. The trial counter is
+durably appended before each jump. A fourth reset without confirmation
+appends a rollback record and selects the last confirmed image. Hardware
+wiring of these already-tested policies waits on the RAM-resident FlexSPI
+backend.
 
 ## Host tooling
 
