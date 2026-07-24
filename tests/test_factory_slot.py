@@ -86,6 +86,35 @@ class FactorySlotSourceTests(unittest.TestCase):
         self.assertIn("NCR2_AUDIO_RX_DMAMUX_SOURCE UINT32_C(19)", source)
         self.assertIn("NCR2_AUDIO_TX_DMAMUX_SOURCE UINT32_C(20)", source)
 
+    def test_factory_board_controls_are_separately_opt_in(self):
+        cmake = (ROOT / "firmware" / "CMakeLists.txt").read_text()
+        source = (
+            ROOT
+            / "firmware"
+            / "factory_slot"
+            / "src"
+            / "board_control.c"
+        ).read_text()
+
+        self.assertIn(
+            'option(\n'
+            '    NCR2_FACTORY_SLOT_BOARD_CONTROLS\n'
+            '    "Enable recovered unapproved factory-slot GPIO '
+            'startup levels"\n'
+            '    OFF\n'
+            ')',
+            cmake,
+        )
+        self.assertIn("#if NCR2_FACTORY_SLOT_BOARD_CONTROLS", source)
+        self.assertIn(
+            "factory-slot board controls require the audio passthrough",
+            cmake,
+        )
+        self.assertIn("IOMUXC_GPIO_AD_B1_10_GPIO1_IO26", source)
+        self.assertIn("NCR2_GPIO1_INITIAL_HIGH", source)
+        self.assertIn("NCR2_GPIO2_INITIAL_HIGH", source)
+        self.assertIn("NCR2_BOARD_RELEASE_DELAY_US", source)
+
     def test_source_audio_emulator_is_offline_only(self):
         source = (
             ROOT / "tools" / "emulate_source_audio.py"

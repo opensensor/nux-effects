@@ -39,6 +39,10 @@ ITCM_SIZE = 0x00080000
 DTCM_SIZE = 0x00020000
 FACTORY_COPY_LIMIT = 0x0001E000
 AUDIO_OK = 0
+BOARD_OK = 0
+FACTORY_SLOT_READY = 0x4E435232
+DWT_CONTROL = 0xE0001000
+DWT_CYCLE_COUNT = 0xE0001004
 
 EXPECTED_SAI = {
     0x0C: 0x00000010,
@@ -281,6 +285,88 @@ def _validate_state(
     return failures
 
 
+def _validate_board_controls(
+    emulator: Uc,
+    symbols: dict[str, int],
+    gpio1_writes: list[int],
+) -> list[str]:
+    failures: list[str] = []
+    status = _u32(
+        emulator,
+        symbols["g_factory_slot_board_status"],
+    )
+    if status != BOARD_OK:
+        return failures
+
+    gpio1_control = 0x85000000
+    gpio2_control = 0x0F800800
+    _require(
+        _u32(emulator, 0x401B8004) & gpio1_control
+        == gpio1_control,
+        "GPIO1 factory-control directions mismatch",
+        failures,
+    )
+    _require(
+        _u32(emulator, 0x401B8000) & gpio1_control
+        == gpio1_control,
+        "GPIO1 factory-control final levels mismatch",
+        failures,
+    )
+    gpio1_control_writes = [
+        value & gpio1_control for value in gpio1_writes
+    ]
+    _require(
+        0x81000000 in gpio1_control_writes,
+        "GPIO1_IO26 was not held low at board preparation",
+        failures,
+    )
+    _require(
+        0x85000000 in gpio1_control_writes,
+        "GPIO1_IO26 was not released high after audio startup",
+        failures,
+    )
+    _require(
+        _u32(emulator, DWT_CYCLE_COUNT) >= 50_000_000,
+        "board release did not preserve the factory delay",
+        failures,
+    )
+    _require(
+        _u32(emulator, 0x401BC004) & gpio2_control
+        == gpio2_control,
+        "GPIO2 factory-control directions mismatch",
+        failures,
+    )
+    _require(
+        _u32(emulator, 0x401BC000) & gpio2_control
+        == 0x04000000,
+        "GPIO2 factory-control final levels mismatch",
+        failures,
+    )
+
+    for mux_address, pad_address, expected_pad in (
+        (0x401F811C, 0x401F830C, 0x10B0),
+        (0x401F8124, 0x401F8314, 0xF0B0),
+        (0x401F8138, 0x401F8328, 0x10B0),
+        (0x401F8168, 0x401F8358, 0x70B0),
+        (0x401F8198, 0x401F8388, 0x70B0),
+        (0x401F819C, 0x401F838C, 0x70B0),
+        (0x401F81A0, 0x401F8390, 0x70B0),
+        (0x401F81A4, 0x401F8394, 0x70B0),
+        (0x401F81A8, 0x401F8398, 0x70B0),
+    ):
+        _require(
+            _u32(emulator, mux_address) == 5,
+            f"board mux 0x{mux_address:08x} mismatch",
+            failures,
+        )
+        _require(
+            _u32(emulator, pad_address) == expected_pad,
+            f"board pad 0x{pad_address:08x} mismatch",
+            failures,
+        )
+    return failures
+
+
 def _validate_passthrough_isr(
     emulator: Uc,
     symbols: dict[str, int],
@@ -346,6 +432,8 @@ def emulate(elf: Path, instruction_limit: int) -> int:
         "Reset_Handler",
         "application_main",
         "g_factory_slot_audio_status",
+        "g_factory_slot_board_status",
+        "g_factory_slot_ready",
         "g_audio_rx",
         "g_audio_tx",
         "g_audio_rx_tcd",
@@ -369,7 +457,8 @@ def emulate(elf: Path, instruction_limit: int) -> int:
     instruction_count = 0
     completed = False
     invalid: str | None = None
-    status_address = symbols["g_factory_slot_audio_status"]
+    gpio1_writes: list[int] = []
+    ready_address = symbols["g_factory_slot_ready"]
     application_start = symbols["application_main"] & ~1
 
     def on_code(
@@ -381,6 +470,12 @@ def emulate(elf: Path, instruction_limit: int) -> int:
         nonlocal instruction_count
         instruction_count += 1
         recent.append(address)
+        if _u32(current, DWT_CONTROL) & 1:
+            _write_u32(
+                current,
+                DWT_CYCLE_COUNT,
+                _u32(current, DWT_CYCLE_COUNT) + 1_000_000,
+            )
         if instruction_count >= instruction_limit:
             current.emu_stop()
 
@@ -394,10 +489,12 @@ def emulate(elf: Path, instruction_limit: int) -> int:
     ) -> None:
         nonlocal completed
         pc = current.reg_read(UC_ARM_REG_PC)
+        if address == 0x401B8000 and size == 4:
+            gpio1_writes.append(value)
         if (
-            address == status_address
+            address == ready_address
             and size == 4
-            and value == AUDIO_OK
+            and value == FACTORY_SLOT_READY
             and application_start <= pc < application_start + 0x40
         ):
             completed = True
@@ -446,8 +543,11 @@ def emulate(elf: Path, instruction_limit: int) -> int:
         return 1
 
     # The memory-write hook runs before the store is committed.
-    _write_u32(emulator, status_address, AUDIO_OK)
+    _write_u32(emulator, ready_address, FACTORY_SLOT_READY)
     failures = _validate_state(emulator, symbols)
+    failures.extend(
+        _validate_board_controls(emulator, symbols, gpio1_writes)
+    )
     failures.extend(_validate_passthrough_isr(emulator, symbols))
     if failures:
         print("source audio contract mismatches:")
@@ -457,7 +557,8 @@ def emulate(elf: Path, instruction_limit: int) -> int:
 
     print(
         "source audio contract verified: SAI1, PLL, pins, DMAMUX, "
-        "RX/TX TCD geometry, and passthrough ISR match factory"
+        "RX/TX TCD geometry, optional board controls, and passthrough "
+        "ISR match factory"
     )
     return 0
 

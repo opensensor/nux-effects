@@ -37,6 +37,18 @@ option(
     OFF
 )
 option(
+    NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    "Enable recovered unapproved factory-slot GPIO startup levels"
+    OFF
+)
+if(NCR2_FACTORY_SLOT_BOARD_CONTROLS AND
+   NOT NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH)
+    message(
+        FATAL_ERROR
+        "factory-slot board controls require the audio passthrough"
+    )
+endif()
+option(
     NCR2_HARDWARE_RECOVERY_WRITE_ENABLE
     "Enable physical NOR mutation in the unapproved hardware bootloader"
     OFF
@@ -238,6 +250,7 @@ if(NCR2_BUILD_FACTORY_SLOT_APP)
         EXCLUDE_FROM_ALL
         factory_slot/src/startup.S
         factory_slot/src/audio_passthrough.c
+        factory_slot/src/board_control.c
         factory_slot/src/main.c
         app/src/effect_runtime.c
         app/src/effects_basic.c
@@ -266,6 +279,7 @@ if(NCR2_BUILD_FACTORY_SLOT_APP)
         PRIVATE
             CPU_MIMXRT1051DVL6B
             NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=$<BOOL:${NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH}>
+            NCR2_FACTORY_SLOT_BOARD_CONTROLS=$<BOOL:${NCR2_FACTORY_SLOT_BOARD_CONTROLS}>
     )
     set_source_files_properties(
         ${NCR2_FACTORY_SLOT_SYSTEM_SOURCE}

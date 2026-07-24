@@ -30,8 +30,11 @@ The default payload remains a hardware-neutral application/runtime skeleton.
 An additional, separately gated build reproduces the executed factory
 SAI1/eDMA contract and runs a four-slot, 32-bit passthrough with two 128-byte
 DTCM buffer halves. The source audio path has passed register-level emulation
-and an emulated DMA-block copy, but it is still marked **offline only**:
-the board's analog mute/bypass sequencing has not yet been recovered.
+and an emulated DMA-block copy. A second opt-in layer reproduces the observed
+factory GPIO startup levels and the GPIO1_IO26 100 ms low-to-high sequence.
+The combined image is still marked **offline only** because the electrical
+meaning and fail-safe polarity of GPIO1_IO26 and GPIO2_IO11 have not yet been
+confirmed on the PCB.
 
 ## Build and verify
 
@@ -46,6 +49,7 @@ cmake -S firmware -B build/factory-slot -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DNCR2_BUILD_FACTORY_SLOT_APP=ON \
   -DNCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=ON \
+  -DNCR2_FACTORY_SLOT_BOARD_CONTROLS=ON \
   -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
 
 cmake --build build/factory-slot --target ncr2_factory_slot_app
@@ -57,12 +61,14 @@ python3 tools/emulate_source_audio.py \
   build/factory-slot/ncr2_factory_slot_app.elf
 ```
 
-Omit `NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=ON` to produce the deliberately
-hardware-inert default. The post-link checker validates the complete vector
-table, including external IRQ0 targeting the shared eDMA channel 0/16
-handler. The source emulator executes reset and initialization, checks the
-factory SAI1, PLL, pin, DMAMUX, and TCD values, injects one RX block, invokes
-the source ISR, and verifies the unchanged TX block. It does not access USB.
+Omit both feature options to produce the deliberately hardware-inert default.
+The audio and board-control options are independent and both default off.
+The post-link checker validates the complete vector table, including external
+IRQ0 targeting the shared eDMA channel 0/16 handler. The source emulator
+executes reset and initialization, checks the factory SAI1, PLL, pin, DMAMUX,
+TCD, and optional GPIO values, verifies the delayed IO26 transition, injects
+one RX block, invokes the source ISR, and verifies the unchanged TX block. It
+does not access USB.
 
 ## Build an offline OEM-DFU package
 
@@ -89,17 +95,19 @@ refuses to overwrite existing artifacts.
 
 For the verified local dump, the generated Metal restore is byte-identical to
 the previously live-tested `eng3-slot1.bina`. The source package is still not
-approved for streaming: digital passthrough is implemented, but the analog
-mute/bypass state and live slot semantics remain unverified.
+approved for streaming: digital passthrough and the observed GPIO sequence
+are implemented, but the candidate GPIOs' electrical fail-safe polarity and
+live slot semantics remain unverified.
 
 ## Gates before first source-slot hardware test
 
 1. ~~Recover and source-control exact audio clocks, pads, SAI framing, eDMA
    channels, and ping-pong buffer geometry.~~
-2. Identify the converter/codec and prove mute/bypass sequencing.
+2. Identify the converter/codec and prove the two remaining candidate GPIO
+   meanings and fail-safe polarities on the PCB.
 3. ~~Implement a bounded passthrough path with DTCM DMA buffers and explicit
    cache policy.~~ The first image keeps DMA state in uncached DTCM.
-4. Add a safe target-visible heartbeat that cannot drive an unknown output.
+4. Add a safe target-visible heartbeat or measurement plan.
 5. Review the generated write range and exact BINA hash.
 6. Keep the byte-identical Metal restore package available before testing.
 

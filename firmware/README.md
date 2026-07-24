@@ -65,6 +65,8 @@ Implemented:
   with a strict post-link checker and paired OEM-DFU/Metal-restore packer;
 - an opt-in factory-compatible SAI1/eDMA passthrough with DTCM ping-pong
   buffers, a weak source DSP hook, and offline register/ISR emulation.
+- separately gated factory GPIO startup levels and the observed delayed
+  GPIO1_IO26 transition, with offline pin-state emulation.
 
 Not implemented:
 
@@ -247,6 +249,7 @@ cmake -S firmware -B build/factory-slot -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DNCR2_BUILD_FACTORY_SLOT_APP=ON \
   -DNCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=ON \
+  -DNCR2_FACTORY_SLOT_BOARD_CONTROLS=ON \
   -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
 cmake --build build/factory-slot --target ncr2_factory_slot_app
 python3 tools/check_factory_slot.py \
@@ -268,8 +271,9 @@ python3 tools/nux_dfu.py make-factory-slot \
 ```
 
 Do not stream the source package yet. It is a structurally valid digital
-passthrough image, but it is not approved until analog mute/bypass sequencing
-has been recovered and reviewed. See
+passthrough image that reproduces the observed factory GPIO startup sequence,
+but it is not approved until the two candidate control pins' electrical
+meaning and fail-safe polarity have been confirmed. See
 [FACTORY_SLOT_APP.md](../docs/hardware/FACTORY_SLOT_APP.md).
 
 ## Build a guarded offline full image

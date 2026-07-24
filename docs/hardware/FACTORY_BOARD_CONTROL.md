@@ -67,17 +67,19 @@ PCB continuity check, or live voltage observation.
 
 ## Source-firmware consequence
 
-The first source hardware test must not guess these semantics. A reviewed
-board adapter should:
+The separately gated source adapter now reproduces the observed levels and
+delay. It remains disabled by default, and the first source hardware test
+must not guess the unresolved electrical semantics. The reviewed test should:
 
-1. place the candidate outputs in the exact factory startup levels before
-   enabling SAI;
-2. preserve the factory low-to-high initialization sequence on GPIO1_IO26;
+1. verify that the source adapter places the candidate outputs in the exact
+   factory startup levels before enabling SAI;
+2. verify the factory 100 ms low-to-high sequence on GPIO1_IO26;
 3. leave the GPIO2_IO23–27 bank at a deterministic factory-valid pattern;
 4. provide an explicit fail-safe path that returns the audio output to the
    electrically confirmed mute/bypass level; and
 5. keep the live-tested Metal restore BINA beside the test artifact.
 
-The exact digital audio contract is already reproduced. Confirming the
-meaning and safe polarity of GPIO1_IO26 and GPIO2_IO11 is now the principal
-gate to an intentional source-image flash.
+The source emulator confirms both the final levels and the delayed IO26
+transition. Confirming the meaning and safe polarity of GPIO1_IO26 and
+GPIO2_IO11 on the physical board is now the principal gate to an intentional
+source-image flash.

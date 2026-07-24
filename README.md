@@ -105,9 +105,11 @@ can wrap it in a validated BINA stream and emits a byte-identical Metal restore
 alongside it. An additional opt-in source path now reproduces the executed
 factory SAI1/eDMA contract, including the PLL, pins, four-slot framing,
 ping-pong TCD rings, IRQ0 handler, and a weak passthrough/DSP hook. It passes
-offline reset/register emulation and a synthetic DMA-block copy. This remains
-an offline packaging milestone, not a flash candidate, until the external
-analog mute/bypass sequencing is recovered.
+offline reset/register emulation and a synthetic DMA-block copy. A separately
+gated board adapter now also reproduces the observed factory GPIO output
+levels and delayed GPIO1_IO26 transition. This remains an offline packaging
+milestone, not a flash candidate, until GPIO1_IO26 and GPIO2_IO11 are
+electrically identified and their fail-safe polarities confirmed.
 
 The application now has an allocation-free extensible effect registry,
 caller-sized processing chains, validated program/bank catalogs, and a
