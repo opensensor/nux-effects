@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "boot_state.h"
+#include "crc32.h"
 #include "ncr2_flash_layout.h"
 #include "pedal_image.h"
 #include "sha256.h"
@@ -34,22 +36,6 @@ static void disable_interrupts(void)
     __asm volatile("cpsid i" ::: "memory");
 }
 
-static uint32_t crc32(const uint8_t *data, size_t size)
-{
-    uint32_t value = UINT32_C(0xFFFFFFFF);
-
-    for (size_t index = 0U; index < size; ++index) {
-        value ^= data[index];
-        for (uint32_t bit = 0U; bit < 8U; ++bit) {
-            const uint32_t mask =
-                (uint32_t)(-(int32_t)(value & UINT32_C(1)));
-            value = (value >> 1U) ^
-                    (UINT32_C(0xEDB88320) & mask);
-        }
-    }
-    return ~value;
-}
-
 static int bytes_equal(const uint8_t *left,
                        const uint8_t *right,
                        size_t size)
@@ -67,8 +53,8 @@ static int manifest_is_valid(const pedal_image_manifest_t *manifest)
     const uint32_t payload_capacity =
         NCR2_APPLICATION_SLOT_SIZE - NCR2_APPLICATION_MANIFEST_SIZE;
     const uint32_t expected_crc =
-        crc32((const uint8_t *)manifest,
-              offsetof(pedal_image_manifest_t, header_crc32));
+        crc32_compute(manifest,
+                      offsetof(pedal_image_manifest_t, header_crc32));
 
     if (manifest->magic != PEDAL_IMAGE_MAGIC ||
         manifest->format_version != PEDAL_IMAGE_FORMAT_VERSION ||
@@ -178,17 +164,42 @@ static void jump_to_application(void)
 
 void bootloader_main(void)
 {
+    const void *metadata_a =
+        (const void *)(uintptr_t)(
+            NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET);
+    const void *metadata_b =
+        (const void *)(uintptr_t)(
+            NCR2_FLASH_XIP_BASE + NCR2_BOOT_METADATA_OFFSET +
+            BOOT_RECORD_SECTOR_SIZE);
+    boot_state_t boot_state;
+    uint8_t selected_slot;
+
     g_boot_diagnostic = BOOT_DIAGNOSTIC_RESET;
+    boot_state_scan(metadata_a, metadata_b, &boot_state);
+    selected_slot = boot_state_selected_slot(&boot_state);
 
-    if (try_slot(NCR2_APPLICATION_A_ADDRESS)) {
+    if (selected_slot == BOOT_SLOT_A &&
+        try_slot(NCR2_APPLICATION_A_ADDRESS)) {
         jump_to_application();
     }
-    g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_A_INVALID;
-
-    if (try_slot(NCR2_APPLICATION_B_ADDRESS)) {
+    if (selected_slot == BOOT_SLOT_B &&
+        try_slot(NCR2_APPLICATION_B_ADDRESS)) {
         jump_to_application();
     }
-    g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_B_INVALID;
+
+    if (selected_slot != BOOT_SLOT_A) {
+        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_B_INVALID;
+        if (try_slot(NCR2_APPLICATION_A_ADDRESS)) {
+            jump_to_application();
+        }
+        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_A_INVALID;
+    } else {
+        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_A_INVALID;
+        if (try_slot(NCR2_APPLICATION_B_ADDRESS)) {
+            jump_to_application();
+        }
+        g_boot_diagnostic = BOOT_DIAGNOSTIC_SLOT_B_INVALID;
+    }
 
     /*
      * Recovery USB and the physical recovery input are the next hardware
@@ -200,4 +211,3 @@ void bootloader_main(void)
         __asm volatile("wfi");
     }
 }
-

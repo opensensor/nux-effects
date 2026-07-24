@@ -45,8 +45,15 @@ arm-none-eabi-size \
 ```
 
 The future BSP is pinned to the official NXP MCUXpresso SDK commit recorded in
-`SDK_REVISION`. The current boot skeleton deliberately needs no vendor headers,
-which keeps image-format and recovery logic host-testable.
+`SDK_REVISION`, with its required modules pinned in `sdk-lock.json`. Fetch the
+exact source workspace with:
+
+```sh
+python3 tools/fetch_mcux_sdk.py
+```
+
+The current boot skeleton deliberately needs no vendor headers, which keeps
+image-format and recovery logic host-testable.
 
 ## Decode the verified stock boot configuration
 
@@ -86,4 +93,3 @@ show:
 - application A valid;
 - application B erased; and
 - no changed partition outside bootloader, metadata, and application slots.
-

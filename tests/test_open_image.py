@@ -72,6 +72,26 @@ class LayoutTests(unittest.TestCase):
             self.layout.application_load_address,
         )
 
+    def test_sdk_lock_is_exact_and_safe(self):
+        spec = importlib.util.spec_from_file_location(
+            "fetch_mcux_sdk", ROOT / "tools" / "fetch_mcux_sdk.py"
+        )
+        fetch_module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(fetch_module)
+        components = fetch_module.load_lock(
+            ROOT / "firmware" / "sdk-lock.json"
+        )
+        self.assertEqual(
+            {component["name"] for component in components},
+            {
+                "mcux-sdk",
+                "CMSIS_5",
+                "mcux-sdk-middleware-usb",
+                "mcux-sdk-examples",
+            },
+        )
+
 
 class ManifestTests(unittest.TestCase):
     def setUp(self):
@@ -156,6 +176,16 @@ class FullImageTests(unittest.TestCase):
         inspected = open_image.inspect_full_image(
             image, layout=self.layout
         )
+        metadata = self.layout.region("boot_metadata")
+        boot_record = open_image.parse_boot_record(
+            image[
+                metadata.offset :
+                metadata.offset + open_image.BOOT_RECORD_STRUCT.size
+            ]
+        )
+        self.assertEqual(boot_record["sequence"], 1)
+        self.assertEqual(boot_record["confirmed_slot"], 0)
+        self.assertEqual(boot_record["pending_slot"], 0xFF)
         self.assertEqual(
             inspected["slots"]["application_a"]["state"], "valid"
         )
@@ -260,6 +290,178 @@ int main(void)
             "ba7816bf8f01cfea414140de5dae2223"
             "b00361a396177a9cb410ff61f20015ad",
         )
+
+
+class EmbeddedBootStateTests(unittest.TestCase):
+    def test_boot_state_transitions_and_journal_scan(self):
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("host C compiler is unavailable")
+        source = r"""
+#include <stdint.h>
+#include <string.h>
+#include "boot_state.h"
+
+int main(void)
+{
+    uint8_t sector_a[BOOT_RECORD_SECTOR_SIZE];
+    uint8_t sector_b[BOOT_RECORD_SECTOR_SIZE];
+    boot_record_t record;
+    boot_state_t state;
+
+    memset(sector_a, 0xff, sizeof(sector_a));
+    memset(sector_b, 0xff, sizeof(sector_b));
+    boot_state_default(&state);
+    state.sequence = 1;
+    boot_record_encode(&state, &record);
+    memcpy(sector_a, &record, sizeof(record));
+
+    boot_state_begin_update(&state, BOOT_SLOT_B);
+    if (boot_state_selected_slot(&state) != BOOT_SLOT_B) return 1;
+    boot_state_record_trial(&state);
+    boot_record_encode(&state, &record);
+    memcpy(sector_b, &record, sizeof(record));
+
+    boot_state_scan(sector_a, sector_b, &state);
+    if (state.sequence != 3 || state.pending_slot != BOOT_SLOT_B) return 2;
+    if (state.trial_count != 1) return 3;
+    boot_state_confirm_pending(&state);
+    if (state.confirmed_slot != BOOT_SLOT_B) return 4;
+    if (state.pending_slot != BOOT_SLOT_NONE) return 5;
+    if (boot_state_find_append_offset(sector_a) != BOOT_RECORD_SIZE) return 6;
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            test_source = directory_path / "boot_state_test.c"
+            executable = directory_path / "boot_state_test"
+            test_source.write_text(source)
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c17",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-I",
+                    str(ROOT / "firmware" / "bootloader" / "include"),
+                    str(
+                        ROOT
+                        / "firmware"
+                        / "bootloader"
+                        / "src"
+                        / "boot_state.c"
+                    ),
+                    str(
+                        ROOT
+                        / "firmware"
+                        / "bootloader"
+                        / "src"
+                        / "crc32.c"
+                    ),
+                    str(test_source),
+                    "-o",
+                    str(executable),
+                ],
+                check=True,
+            )
+            subprocess.run([executable], check=True)
+
+
+class EmbeddedRecoveryProtocolTests(unittest.TestCase):
+    def test_packet_validation_and_flash_ranges(self):
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("host C compiler is unavailable")
+        source = r"""
+#include <stdint.h>
+#include <string.h>
+#include "boot_state.h"
+#include "recovery_protocol.h"
+
+int main(void)
+{
+    recovery_packet_t packet;
+    uint32_t address = 0;
+
+    memset(&packet, 0, sizeof(packet));
+    packet.magic = RECOVERY_PACKET_MAGIC;
+    packet.version = RECOVERY_PROTOCOL_VERSION;
+    packet.command = RECOVERY_COMMAND_WRITE_CHUNK;
+    packet.session = 0x12345678u;
+    packet.sequence = 9;
+    packet.length = 3;
+    packet.payload[0] = 1;
+    packet.payload[1] = 2;
+    packet.payload[2] = 3;
+    recovery_packet_finalize(&packet);
+
+    if (recovery_packet_validate(&packet, 0x12345678u, 9, 1) !=
+        RECOVERY_STATUS_OK) return 1;
+    packet.payload[1] ^= 1;
+    if (recovery_packet_validate(&packet, 0x12345678u, 9, 1) !=
+        RECOVERY_STATUS_BAD_PAYLOAD_CRC) return 2;
+    packet.payload[1] ^= 1;
+    if (recovery_packet_validate(&packet, 0x12345678u, 10, 1) !=
+        RECOVERY_STATUS_BAD_SEQUENCE) return 3;
+
+    if (recovery_resolve_range(BOOT_SLOT_A, 0, 32, &address) !=
+        RECOVERY_STATUS_OK) return 4;
+    if (address != 0x60400000u) return 5;
+    if (recovery_resolve_range(BOOT_SLOT_B, 0x1ffff0u, 16, &address) !=
+        RECOVERY_STATUS_OK) return 6;
+    if (address != 0x607ffff0u) return 7;
+    if (recovery_resolve_range(BOOT_SLOT_B, 0x1ffff0u, 17, &address) !=
+        RECOVERY_STATUS_RANGE_DENIED) return 8;
+    if (recovery_resolve_range(2, 0, 1, &address) !=
+        RECOVERY_STATUS_BAD_SLOT) return 9;
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            test_source = directory_path / "recovery_test.c"
+            executable = directory_path / "recovery_test"
+            test_source.write_text(source)
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c17",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-I",
+                    str(ROOT / "firmware" / "bootloader" / "include"),
+                    "-I",
+                    str(
+                        ROOT
+                        / "firmware"
+                        / "platform"
+                        / "ncr2"
+                        / "include"
+                    ),
+                    str(
+                        ROOT
+                        / "firmware"
+                        / "bootloader"
+                        / "src"
+                        / "recovery_protocol.c"
+                    ),
+                    str(
+                        ROOT
+                        / "firmware"
+                        / "bootloader"
+                        / "src"
+                        / "crc32.c"
+                    ),
+                    str(test_source),
+                    "-o",
+                    str(executable),
+                ],
+                check=True,
+            )
+            subprocess.run([executable], check=True)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ artifacts/*
 # Firmware build products.
 build/
 build-*/
+third_party/
 zero_wear/build/
 zero_wear/build-*/
 *.elf
@@ -41,4 +42,3 @@ __pycache__/
 .vscode/
 *~
 .DS_Store
-

@@ -29,6 +29,13 @@ MANIFEST_BOARD_NCR2 = 0x3252434E
 MANIFEST_FORMAT_VERSION = 1
 MANIFEST_STRUCT = struct.Struct("<IHHIIIIII32sI")
 
+BOOT_RECORD_MAGIC = 0x31545342
+BOOT_RECORD_FORMAT_VERSION = 1
+BOOT_RECORD_STRUCT = struct.Struct("<IHHIBBBBI8sI")
+BOOT_SLOT_A = 0
+BOOT_SLOT_NONE = 0xFF
+BOOT_DEFAULT_MAX_TRIALS = 3
+
 IVT_OFFSET = 0x1000
 IVT_STRUCT = struct.Struct("<8I")
 BOOT_DATA_STRUCT = struct.Struct("<3I")
@@ -285,6 +292,69 @@ def parse_manifest(data: bytes, *, layout: Layout) -> Manifest:
     )
 
 
+def build_initial_boot_record() -> bytes:
+    prefix = BOOT_RECORD_STRUCT.pack(
+        BOOT_RECORD_MAGIC,
+        BOOT_RECORD_FORMAT_VERSION,
+        BOOT_RECORD_STRUCT.size,
+        1,
+        BOOT_SLOT_A,
+        BOOT_SLOT_NONE,
+        0,
+        BOOT_DEFAULT_MAX_TRIALS,
+        0,
+        bytes(8),
+        0,
+    )
+    crc = zlib.crc32(prefix[:-4]) & 0xFFFFFFFF
+    return prefix[:-4] + struct.pack("<I", crc)
+
+
+def parse_boot_record(data: bytes) -> dict[str, int]:
+    if len(data) < BOOT_RECORD_STRUCT.size:
+        raise ImageError("boot record is truncated")
+    (
+        magic,
+        format_version,
+        record_size,
+        sequence,
+        confirmed_slot,
+        pending_slot,
+        trial_count,
+        max_trials,
+        flags,
+        _reserved,
+        crc,
+    ) = BOOT_RECORD_STRUCT.unpack_from(data)
+    expected_crc = zlib.crc32(data[: BOOT_RECORD_STRUCT.size - 4])
+    expected_crc &= 0xFFFFFFFF
+    if magic != BOOT_RECORD_MAGIC:
+        raise ImageError(f"bad boot-record magic {magic:#x}")
+    if format_version != BOOT_RECORD_FORMAT_VERSION:
+        raise ImageError(f"bad boot-record format {format_version}")
+    if record_size != BOOT_RECORD_STRUCT.size:
+        raise ImageError(f"bad boot-record size {record_size}")
+    if confirmed_slot not in (0, 1):
+        raise ImageError(f"bad confirmed slot {confirmed_slot}")
+    if pending_slot not in (0, 1, BOOT_SLOT_NONE):
+        raise ImageError(f"bad pending slot {pending_slot}")
+    if pending_slot == confirmed_slot:
+        raise ImageError("pending slot duplicates confirmed slot")
+    if max_trials == 0 or trial_count > max_trials:
+        raise ImageError("boot-record trial count is invalid")
+    if crc != expected_crc:
+        raise ImageError(f"boot-record CRC {crc:#x} != {expected_crc:#x}")
+    return {
+        "sequence": sequence,
+        "confirmed_slot": confirmed_slot,
+        "pending_slot": pending_slot,
+        "trial_count": trial_count,
+        "max_trials": max_trials,
+        "flags": flags,
+        "crc32": crc,
+    }
+
+
 def validate_vector(payload: bytes, manifest: Manifest) -> None:
     if len(payload) < manifest.image_size:
         raise ImageError("application payload is truncated")
@@ -477,6 +547,11 @@ def build_full_image(
     image[metadata_region.offset : metadata_region.end] = (
         erased * metadata_region.size
     )
+    initial_boot_record = build_initial_boot_record()
+    image[
+        metadata_region.offset :
+        metadata_region.offset + len(initial_boot_record)
+    ] = initial_boot_record
     image[slot_a.offset : slot_a.end] = erased * slot_a.size
     image[slot_a.offset : slot_a.offset + layout.manifest_size] = (
         manifest_sector
@@ -534,6 +609,7 @@ def build_full_image(
             "image_sha256": parsed_manifest.image_sha256.hex(),
             "header_crc32": f"0x{parsed_manifest.header_crc32:08x}",
         },
+        "boot_metadata": parse_boot_record(initial_boot_record),
         "preserved": {
             "boot_header_sha256": sha256(
                 output[

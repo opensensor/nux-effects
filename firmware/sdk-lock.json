@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "components": [
+    {
+      "name": "mcux-sdk",
+      "path": "core",
+      "url": "https://github.com/nxp-mcuxpresso/mcux-sdk.git",
+      "revision": "8a289764d763ad06e0c3a05c885644ed98b970af"
+    },
+    {
+      "name": "CMSIS_5",
+      "path": "core/CMSIS",
+      "url": "https://github.com/nxp-mcuxpresso/CMSIS_5.git",
+      "revision": "ace291fb56654b2a62b4a80cbba8a75abb36aa18"
+    },
+    {
+      "name": "mcux-sdk-middleware-usb",
+      "path": "middleware/usb",
+      "url": "https://github.com/nxp-mcuxpresso/mcux-sdk-middleware-usb.git",
+      "revision": "ed235e3e785993459080a36fb07049da21449ae3"
+    },
+    {
+      "name": "mcux-sdk-examples",
+      "path": "examples",
+      "url": "https://github.com/nxp-mcuxpresso/mcux-sdk-examples.git",
+      "revision": "52b428258efda7d5bd8a2ace2195ca828356743a"
+    }
+  ]
+}
+

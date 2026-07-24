@@ -62,6 +62,9 @@ add_executable(
     ncr2_bootloader
     bootloader/src/startup.S
     bootloader/src/bootloader.c
+    bootloader/src/boot_state.c
+    bootloader/src/crc32.c
+    bootloader/src/recovery_protocol.c
     bootloader/src/sha256.c
 )
 target_include_directories(
