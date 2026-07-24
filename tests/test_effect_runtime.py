@@ -97,11 +97,20 @@ static uint16_t bias_parameter(
     return EFFECT_RUNTIME_OK;
 }
 
+static const effect_parameter_descriptor_t gain_parameters[] = {
+    { 0U, "gain", "linear", 0.0F, 4.0F, 1.0F },
+};
+
+static const effect_parameter_descriptor_t bias_parameters[] = {
+    { 7U, "bias", "linear", -2.0F, 2.0F, 0.0F },
+};
+
 static const effect_descriptor_t gain_descriptor = {
     .key = { EFFECT_VENDOR_OPEN, 1U },
     .name = "gain",
     .abi_version = EFFECT_RUNTIME_ABI_VERSION,
     .parameter_count = 1U,
+    .parameters = gain_parameters,
     .context_size = sizeof(gain_context_t),
     .context_alignment = _Alignof(gain_context_t),
     .initialize = gain_init,
@@ -115,6 +124,7 @@ static const effect_descriptor_t bias_descriptor = {
     .name = "bias",
     .abi_version = EFFECT_RUNTIME_ABI_VERSION,
     .parameter_count = 1U,
+    .parameters = bias_parameters,
     .context_size = sizeof(bias_context_t),
     .context_alignment = 16U,
     .initialize = bias_init,
@@ -156,6 +166,8 @@ int main(void)
             &registry,
             (effect_key_t){ EFFECT_VENDOR_OPEN, 2U }) !=
         &bias_descriptor) return 3;
+    if (effect_parameter_find(&gain_descriptor, 0U) !=
+        &gain_parameters[0]) return 18;
 
     if (effect_chain_initialize(
             &chain, &registry, instances, 8U,
@@ -184,6 +196,9 @@ int main(void)
     if (effect_chain_set_parameter(
             &chain, bias_index, 7U, 1.0F) !=
         EFFECT_RUNTIME_OK) return 11;
+    if (effect_chain_set_parameter(
+            &chain, gain_index, 0U, 5.0F) !=
+        EFFECT_RUNTIME_PARAMETER_OUT_OF_RANGE) return 19;
     if (effect_chain_process(&chain, &block) !=
         EFFECT_RUNTIME_OK) return 12;
     if (left[0] != 3.0F || left[1] != -1.0F ||

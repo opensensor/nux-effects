@@ -77,6 +77,9 @@ sequence-bound application confirmation, immediate rejection, rollback, and
 emergency slot fallback. An opt-in eight-second WDOG1 trial adapter compiles
 in the nonbootable hardware probe but is not wired into the default image.
 The application now has an allocation-free extensible effect registry,
-caller-sized processing chains, and a generic program selector. Its default
-five-second navigation gesture operates on a runtime catalog size and has no
-four-effect assumption.
+caller-sized processing chains, validated program/bank catalogs, and a
+generic program selector. Its default five-second navigation gesture
+operates on runtime catalog sizes and has no four-effect assumption.
+The first source catalog contains six host-tested starter programs assembled
+from Gain and Soft Clip descriptors; it is test scaffolding pending audio
+hardware bring-up.

@@ -23,18 +23,47 @@ categories. They are neither reserved slots nor the complete product.
 
 - stable `(vendor_id, effect_id)` identity;
 - ABI version and human-readable name;
+- discoverable parameter IDs, names, units, ranges, and defaults;
 - context size and alignment;
 - initialize, reset, in-place process, and parameter callbacks; and
 - explicit sample rate and maximum block size at initialization.
 
 The registry is a caller-owned array of descriptor pointers. It has no
 compiled-in effect-count limit. Duplicate keys, malformed descriptors, and
-unsupported ABI versions are rejected before audio starts.
+unsupported ABI versions are rejected before audio starts. Duplicate
+parameter IDs, NaNs, invalid ranges, and out-of-range program values are also
+rejected before an effect callback runs. Chain construction applies every
+declared default after initialization, then a program applies its explicit
+overrides.
 
 The current processor is an ordered in-place chain. Its instance array and
 context arena are supplied by the application, so board builds choose their
 own capacity and memory placement. Adding a graph planner later does not
 change individual effect descriptors.
+
+## Program and bank descriptors
+
+`program_runtime` adds two stable namespaces above individual effects:
+
+- `(vendor_id, program_id)` identifies a playable program; and
+- `(vendor_id, bank_id)` identifies a user-facing collection.
+
+A program descriptor lists effect keys and their initial parameter values.
+A bank lists program keys. Catalogs and banks are caller-owned arrays with
+runtime counts; there is no `MAX_EFFECTS`, `MAX_PROGRAMS`, `MAX_BANKS`, or
+factory slot number in the model. Programs not currently exposed in a bank
+may remain in the catalog for editor, MIDI, or automation access.
+
+Catalog validation rejects duplicate identities, unknown effects, duplicate
+initial parameter IDs, malformed nodes, missing programs, and duplicate
+banks. `program_prepare` builds into an empty inactive chain. If any effect
+cannot initialize or accept its parameters, the partial chain is cleared and
+cannot become active. The audio engine can therefore prepare a new program
+beside the current one and crossfade only after preparation succeeds.
+
+`program_cursor` provides count-independent next/previous program and bank
+navigation. It contains no timing or footswitch policy; those events may come
+from `program_selector`, MIDI, an editor, or future control mappings.
 
 ## Real-time rules
 
@@ -84,3 +113,11 @@ a closed list:
 
 Every program build will eventually report DTCM, SDRAM, CPU-cycle, and
 latency budgets before it can become active.
+
+The initial host-tested catalog contains `Basic Gain` and `Basic Soft Clip`.
+They are reference implementations for descriptor discovery, multi-channel
+block processing, parameter validation, and chain composition—not a claim
+that the audio hardware path is ready. A six-program `Open Starter` bank
+demonstrates clean gain, boost, several drive settings, and a two-effect
+chain. Six is a starter catalog chosen to exercise the machinery, not a
+maximum.

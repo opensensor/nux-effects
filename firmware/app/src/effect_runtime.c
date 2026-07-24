@@ -27,8 +27,35 @@ static int descriptor_is_valid(
         return 0;
     }
     if (descriptor->parameter_count != UINT16_C(0) &&
-        descriptor->set_parameter == NULL) {
+        (descriptor->parameters == NULL ||
+         descriptor->set_parameter == NULL)) {
         return 0;
+    }
+    for (uint16_t index = UINT16_C(0);
+         index < descriptor->parameter_count;
+         ++index) {
+        const effect_parameter_descriptor_t *parameter =
+            &descriptor->parameters[index];
+
+        if (parameter->name == NULL ||
+            parameter->unit == NULL ||
+            parameter->minimum != parameter->minimum ||
+            parameter->maximum != parameter->maximum ||
+            parameter->default_value !=
+                parameter->default_value ||
+            parameter->minimum > parameter->maximum ||
+            parameter->default_value < parameter->minimum ||
+            parameter->default_value > parameter->maximum) {
+            return 0;
+        }
+        for (uint16_t previous = UINT16_C(0);
+             previous < index;
+             ++previous) {
+            if (parameter->parameter_id ==
+                descriptor->parameters[previous].parameter_id) {
+                return 0;
+            }
+        }
     }
     return 1;
 }
@@ -109,6 +136,26 @@ const effect_descriptor_t *effect_registry_find(
                 registry->effects[index]->key,
                 key)) {
             return registry->effects[index];
+        }
+    }
+    return NULL;
+}
+
+const effect_parameter_descriptor_t *effect_parameter_find(
+    const effect_descriptor_t *effect,
+    uint32_t parameter_id)
+{
+    if (effect == NULL ||
+        effect->parameters == NULL) {
+        return NULL;
+    }
+
+    for (uint16_t index = UINT16_C(0);
+         index < effect->parameter_count;
+         ++index) {
+        if (effect->parameters[index].parameter_id ==
+            parameter_id) {
+            return &effect->parameters[index];
         }
     }
     return NULL;
@@ -205,6 +252,17 @@ uint16_t effect_chain_add(
             EFFECT_RUNTIME_OK) {
         return EFFECT_RUNTIME_CALLBACK_FAILED;
     }
+    for (uint16_t parameter = UINT16_C(0);
+         parameter < descriptor->parameter_count;
+         ++parameter) {
+        if (descriptor->set_parameter(
+                context,
+                descriptor->parameters[parameter].parameter_id,
+                descriptor->parameters[parameter].default_value) !=
+            EFFECT_RUNTIME_OK) {
+            return EFFECT_RUNTIME_CALLBACK_FAILED;
+        }
+    }
 
     chain->instances[chain->count].descriptor = descriptor;
     chain->instances[chain->count].context = context;
@@ -228,6 +286,21 @@ void effect_chain_reset(effect_chain_t *chain)
                 chain->instances[index].context);
         }
     }
+}
+
+void effect_chain_clear(effect_chain_t *chain)
+{
+    if (chain == NULL || chain->instances == NULL) {
+        return;
+    }
+
+    effect_chain_reset(chain);
+    for (size_t index = 0U; index < chain->count; ++index) {
+        chain->instances[index].descriptor = NULL;
+        chain->instances[index].context = NULL;
+    }
+    chain->count = 0U;
+    chain->arena_used = 0U;
 }
 
 uint16_t effect_chain_process(
@@ -263,6 +336,7 @@ uint16_t effect_chain_set_parameter(
     float value)
 {
     effect_instance_t *instance;
+    const effect_parameter_descriptor_t *parameter;
 
     if (chain == NULL ||
         chain->instances == NULL ||
@@ -273,6 +347,18 @@ uint16_t effect_chain_set_parameter(
     if (instance->descriptor == NULL ||
         instance->descriptor->set_parameter == NULL) {
         return EFFECT_RUNTIME_PARAMETER_NOT_FOUND;
+    }
+    parameter =
+        effect_parameter_find(
+            instance->descriptor,
+            parameter_id);
+    if (parameter == NULL) {
+        return EFFECT_RUNTIME_PARAMETER_NOT_FOUND;
+    }
+    if (value != value ||
+        value < parameter->minimum ||
+        value > parameter->maximum) {
+        return EFFECT_RUNTIME_PARAMETER_OUT_OF_RANGE;
     }
     if (instance->descriptor->set_parameter(
             instance->context,

@@ -40,6 +40,9 @@ Implemented:
   USB, FlexSPI, recovery, and journal layers;
 - an allocation-free effect registry and caller-sized processing-chain
   runtime with no fixed effect-count limit;
+- stable program and bank descriptors with catalog validation, transactional
+  inactive-chain preparation, and count-independent navigation;
+- host-tested descriptor-driven Gain and Soft Clip reference effects;
 - a RAM-only program selector whose configurable default gesture is a
   five-second hold and which operates on any runtime catalog size;
 - a tested adapter from that NOR policy to the recovery engine and

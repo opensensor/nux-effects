@@ -343,6 +343,11 @@ number of registered effects subject to explicit memory, CPU, and latency
 budgets. The initial implementation is an ordered chain; the ABI permits a
 later graph planner for splits, parallel paths, and mixers.
 
+Programs and banks also use stable vendor-scoped keys. Their catalogs are
+runtime-sized caller-owned arrays rather than a fixed enum. A validated
+program descriptor names effect keys and initial parameters; an inactive
+chain must prepare successfully before it can take part in a crossfade.
+
 All active-program storage is preallocated from caller-provided DTCM and
 SDRAM arenas. A program switch:
 

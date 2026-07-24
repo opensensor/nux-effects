@@ -30,6 +30,7 @@ enum effect_runtime_status {
     EFFECT_RUNTIME_ARENA_FULL = 6,
     EFFECT_RUNTIME_CALLBACK_FAILED = 7,
     EFFECT_RUNTIME_PARAMETER_NOT_FOUND = 8,
+    EFFECT_RUNTIME_PARAMETER_OUT_OF_RANGE = 9,
 };
 
 typedef uint16_t (*effect_initialize_fn)(
@@ -45,11 +46,21 @@ typedef uint16_t (*effect_set_parameter_fn)(
     uint32_t parameter_id,
     float value);
 
+typedef struct effect_parameter_descriptor {
+    uint32_t parameter_id;
+    const char *name;
+    const char *unit;
+    float minimum;
+    float maximum;
+    float default_value;
+} effect_parameter_descriptor_t;
+
 typedef struct effect_descriptor {
     effect_key_t key;
     const char *name;
     uint16_t abi_version;
     uint16_t parameter_count;
+    const effect_parameter_descriptor_t *parameters;
     uint32_t context_size;
     uint32_t context_alignment;
     effect_initialize_fn initialize;
@@ -90,6 +101,9 @@ uint16_t effect_registry_validate(
 const effect_descriptor_t *effect_registry_find(
     const effect_registry_t *registry,
     effect_key_t key);
+const effect_parameter_descriptor_t *effect_parameter_find(
+    const effect_descriptor_t *effect,
+    uint32_t parameter_id);
 uint16_t effect_chain_initialize(
     effect_chain_t *chain,
     const effect_registry_t *registry,
@@ -104,6 +118,7 @@ uint16_t effect_chain_add(
     effect_key_t key,
     size_t *instance_index);
 void effect_chain_reset(effect_chain_t *chain);
+void effect_chain_clear(effect_chain_t *chain);
 uint16_t effect_chain_process(
     effect_chain_t *chain,
     effect_audio_block_t *block);

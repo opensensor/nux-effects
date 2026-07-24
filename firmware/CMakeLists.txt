@@ -117,8 +117,11 @@ add_executable(
     ncr2_app
     app/src/startup.S
     app/src/effect_runtime.c
+    app/src/effects_basic.c
     app/src/main.c
+    app/src/program_runtime.c
     app/src/program_selector.c
+    app/src/programs_builtin.c
     bootloader/src/boot_recovery_request.c
     bootloader/src/boot_trial.c
     platform/ncr2/src/ncr2_boot_request.c
