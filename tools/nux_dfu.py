@@ -40,6 +40,8 @@ REPORT_DATA_SIZE = 60
 REPORTS_PER_RECORD = 9
 FLASH_BASE = 0x60000
 ENGINE_SLOT_SIZE = 0x20000
+FACTORY_ENGINE_COPY_SIZE = 0x1E000
+FACTORY_ENGINE_STACK_TOP = 0x20020000
 SETUP_OPERATION = 1
 PAGE_OPERATION = 4
 PRODUCT_ID = b"COREDLX"
@@ -413,6 +415,8 @@ def command_query(_args: argparse.Namespace) -> None:
 def replace_engine_slot(
     stock: bytes, *, selected_slot: int, source_slot: int
 ) -> bytes:
+    if selected_slot < 0 or source_slot < 0:
+        raise DfuFormatError("engine slot indexes cannot be negative")
     selected_offset = FLASH_BASE + selected_slot * ENGINE_SLOT_SIZE
     source_offset = FLASH_BASE + source_slot * ENGINE_SLOT_SIZE
     required = max(selected_offset, source_offset) + ENGINE_SLOT_SIZE
@@ -427,6 +431,53 @@ def replace_engine_slot(
     image[target_relative : target_relative + ENGINE_SLOT_SIZE] = stock[
         source_offset : source_offset + ENGINE_SLOT_SIZE
     ]
+    return bytes(image)
+
+
+def install_factory_slot(
+    stock: bytes, application: bytes, *, selected_slot: int
+) -> bytes:
+    """Install a source ITCM image into one factory-selected engine slot.
+
+    The returned image begins at the factory DFU bootloader's hardcoded
+    0x60000 write base. Slots before the target are copied byte-for-byte from
+    the verified stock image because the protocol only writes contiguously.
+    """
+
+    if selected_slot < 0:
+        raise DfuFormatError("engine slot index cannot be negative")
+    selected_offset = FLASH_BASE + selected_slot * ENGINE_SLOT_SIZE
+    flash_end = selected_offset + ENGINE_SLOT_SIZE
+    if len(stock) < flash_end:
+        raise DfuFormatError(
+            f"stock dump is too short for engine slot {selected_slot}"
+        )
+    if len(application) < 8:
+        raise DfuFormatError("factory-slot application has no vector table")
+    if len(application) > FACTORY_ENGINE_COPY_SIZE:
+        raise DfuFormatError(
+            f"factory-slot application is {len(application):#x} bytes, "
+            f"beyond the {FACTORY_ENGINE_COPY_SIZE:#x}-byte copy budget"
+        )
+
+    initial_stack, reset = struct.unpack_from("<II", application)
+    if initial_stack != FACTORY_ENGINE_STACK_TOP:
+        raise DfuFormatError(
+            f"factory-slot initial stack is {initial_stack:#x}, expected "
+            f"{FACTORY_ENGINE_STACK_TOP:#x}"
+        )
+    if not reset & 1:
+        raise DfuFormatError("factory-slot reset vector is not Thumb")
+    if reset & ~1 >= len(application):
+        raise DfuFormatError(
+            f"factory-slot reset vector {reset:#x} is outside the image"
+        )
+
+    image = bytearray(stock[FLASH_BASE:flash_end])
+    target_relative = selected_offset - FLASH_BASE
+    slot = bytearray(ENGINE_SLOT_SIZE)
+    slot[: len(application)] = application
+    image[target_relative : target_relative + ENGINE_SLOT_SIZE] = slot
     return bytes(image)
 
 
@@ -484,6 +535,61 @@ def command_make_engine_test(args: argparse.Namespace) -> None:
     print(
         f"restore BINA:     {args.restore_output} ({len(restore_bina):#x}, "
         f"SHA-256 {sha256(restore_bina)})"
+    )
+    print(
+        f"programmed range: {FLASH_BASE:#x}.."
+        f"{FLASH_BASE + len(test_image) - 1:#x}"
+    )
+
+
+def command_make_factory_slot(args: argparse.Namespace) -> None:
+    stock = args.stock.read_bytes()
+    stock_sha = sha256(stock)
+    if stock_sha != args.expected_stock_sha256.lower():
+        raise DfuFormatError(
+            f"stock SHA-256 is {stock_sha}, expected "
+            f"{args.expected_stock_sha256.lower()}"
+        )
+    application = args.application.read_bytes()
+    test_image = install_factory_slot(
+        stock, application, selected_slot=args.selected_slot
+    )
+    restore_image = replace_engine_slot(
+        stock,
+        selected_slot=args.selected_slot,
+        source_slot=args.restore_source_slot,
+    )
+    test_bina = build_bina(test_image, args.test_version.encode("ascii"))
+    restore_bina = build_bina(
+        restore_image, args.restore_version.encode("ascii")
+    )
+    parse_bina(test_bina)
+    parse_bina(restore_bina)
+    write_bina(args.output, test_bina)
+    write_bina(args.restore_output, restore_bina)
+
+    target_start = FLASH_BASE + args.selected_slot * ENGINE_SLOT_SIZE
+    print(f"stock SHA-256:    {stock_sha}")
+    print(
+        f"source app:       {args.application} ({len(application):#x}, "
+        f"SHA-256 {sha256(application)})"
+    )
+    print(
+        f"target slot:      {args.selected_slot} "
+        f"{target_start:#x}.."
+        f"{target_start + ENGINE_SLOT_SIZE - 1:#x}"
+    )
+    print(
+        f"source BINA:      {args.output} ({len(test_bina):#x}, "
+        f"SHA-256 {sha256(test_bina)})"
+    )
+    print(
+        f"Metal restore:    slot {args.restore_source_slot} -> "
+        f"slot {args.selected_slot}"
+    )
+    print(
+        f"restore BINA:     {args.restore_output} "
+        f"({len(restore_bina):#x}, SHA-256 {sha256(restore_bina)})"
     )
     print(
         f"programmed range: {FLASH_BASE:#x}.."
@@ -620,6 +726,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     make_parser.add_argument("--expected-stock-sha256")
     make_parser.set_defaults(func=command_make_engine_test)
+
+    factory_parser = subparsers.add_parser(
+        "make-factory-slot",
+        help=(
+            "package a source-built ITCM application for the selected "
+            "factory engine slot and generate a factory Metal restore"
+        ),
+    )
+    factory_parser.add_argument("stock", type=Path)
+    factory_parser.add_argument("application", type=Path)
+    factory_parser.add_argument("output", type=Path)
+    factory_parser.add_argument("restore_output", type=Path)
+    factory_parser.add_argument("--selected-slot", type=int, default=1)
+    factory_parser.add_argument(
+        "--restore-source-slot", type=int, default=3
+    )
+    factory_parser.add_argument(
+        "--test-version", type=exact_ascii_8, default="OPEN0001"
+    )
+    factory_parser.add_argument(
+        "--restore-version", type=exact_ascii_8, default="ENG3TEST"
+    )
+    factory_parser.add_argument(
+        "--expected-stock-sha256",
+        default=(
+            "4263ef41c0745f6e8c00be13b52391b6"
+            "b04a5f51779b12d0e191abf6888e7a14"
+        ),
+    )
+    factory_parser.set_defaults(func=command_make_factory_slot)
 
     dry_run_parser = subparsers.add_parser(
         "dry-run", help="expand every USB report without touching USB"

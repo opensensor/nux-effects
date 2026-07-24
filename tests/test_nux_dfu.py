@@ -4,9 +4,12 @@ from pathlib import Path
 
 from tools.nux_dfu import (
     ENGINE_SLOT_SIZE,
+    FACTORY_ENGINE_COPY_SIZE,
+    FACTORY_ENGINE_STACK_TOP,
     FLASH_BASE,
     RECORD_SIZE,
     build_bina,
+    install_factory_slot,
     parse_bina,
     reports_from_bina,
     replace_engine_slot,
@@ -99,6 +102,53 @@ class BinaProtocolTests(unittest.TestCase):
                 FLASH_BASE + 4 * ENGINE_SLOT_SIZE
             ],
         )
+
+    def test_source_app_install_preserves_prior_slots_and_pads_target(self):
+        stock = bytes(
+            (index // ENGINE_SLOT_SIZE) & 0xFF
+            for index in range(FLASH_BASE + 4 * ENGINE_SLOT_SIZE)
+        )
+        application = bytearray(0x1000)
+        application[0:4] = FACTORY_ENGINE_STACK_TOP.to_bytes(4, "little")
+        application[4:8] = (0x201).to_bytes(4, "little")
+        application[0x200:0x204] = b"OPEN"
+
+        image = install_factory_slot(
+            stock, bytes(application), selected_slot=1
+        )
+
+        self.assertEqual(
+            image[:ENGINE_SLOT_SIZE],
+            stock[FLASH_BASE : FLASH_BASE + ENGINE_SLOT_SIZE],
+        )
+        self.assertEqual(
+            image[ENGINE_SLOT_SIZE : ENGINE_SLOT_SIZE + len(application)],
+            application,
+        )
+        self.assertEqual(
+            image[ENGINE_SLOT_SIZE + len(application) :],
+            bytes(ENGINE_SLOT_SIZE - len(application)),
+        )
+
+    def test_source_app_install_rejects_invalid_factory_vectors(self):
+        stock = bytes(FLASH_BASE + 4 * ENGINE_SLOT_SIZE)
+        too_large = bytearray(FACTORY_ENGINE_COPY_SIZE + 1)
+        too_large[0:4] = FACTORY_ENGINE_STACK_TOP.to_bytes(4, "little")
+        too_large[4:8] = (0x101).to_bytes(4, "little")
+        with self.assertRaisesRegex(ValueError, "copy budget"):
+            install_factory_slot(stock, bytes(too_large), selected_slot=1)
+
+        wrong_stack = bytearray(0x400)
+        wrong_stack[0:4] = (0x20018000).to_bytes(4, "little")
+        wrong_stack[4:8] = (0x101).to_bytes(4, "little")
+        with self.assertRaisesRegex(ValueError, "initial stack"):
+            install_factory_slot(stock, bytes(wrong_stack), selected_slot=1)
+
+        arm_reset = bytearray(0x400)
+        arm_reset[0:4] = FACTORY_ENGINE_STACK_TOP.to_bytes(4, "little")
+        arm_reset[4:8] = (0x100).to_bytes(4, "little")
+        with self.assertRaisesRegex(ValueError, "not Thumb"):
+            install_factory_slot(stock, bytes(arm_reset), selected_slot=1)
 
 
 if __name__ == "__main__":

@@ -103,6 +103,32 @@ restore-stock-slots.bina
   92a30e9878d237f4e8c7f91e4c17e0204dd90fde0620853f6176184885a527bb
 ```
 
+## Source factory-slot transition
+
+The recovered launcher ABI also supports an original source image linked at
+ITCM address zero. `ncr2_factory_slot_app` is constrained to the launcher's
+`0x1e000` copy size and has its own vector, stack, VTOR, and reset path.
+
+`make-factory-slot` constructs two offline artifacts:
+
+```bash
+./tools/nux_dfu.py make-factory-slot \
+  dump1.bin \
+  build/factory-slot/ncr2_factory_slot_app.bin \
+  build/factory-slot/source-slot-OFFLINE-ONLY.bina \
+  build/factory-slot/metal-restore.bina
+```
+
+The source package preserves stock slot 0 and installs the open binary into
+selected slot 1. The paired restore copies factory Metal slot 3 into selected
+slot 1. With the verified dump and default `ENG3TEST` version, that restore is
+byte-identical to the live-validated `eng3-slot1.bina`.
+
+The current source application has no audio initialization or target-visible
+diagnostic and is not approved for streaming. This command establishes
+reproducible packaging and rollback; it does not turn an incomplete payload
+into safe firmware.
+
 ## Host utility
 
 Inspect and expand a stream without touching USB:

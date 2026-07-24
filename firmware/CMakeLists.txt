@@ -27,6 +27,11 @@ option(
     OFF
 )
 option(
+    NCR2_BUILD_FACTORY_SLOT_APP
+    "Build the unapproved source app for the recovered factory slot ABI"
+    OFF
+)
+option(
     NCR2_HARDWARE_RECOVERY_WRITE_ENABLE
     "Enable physical NOR mutation in the unapproved hardware bootloader"
     OFF
@@ -205,6 +210,58 @@ ncr2_firmware_target(
     ncr2_factory_bridge
     ${CMAKE_CURRENT_SOURCE_DIR}/app/ncr2_app.ld
 )
+
+if(NCR2_BUILD_FACTORY_SLOT_APP)
+    if(NOT EXISTS
+       "${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/system_MIMXRT1051.c")
+        message(
+            FATAL_ERROR
+            "NCR2_BUILD_FACTORY_SLOT_APP requires the pinned MCUX SDK workspace"
+        )
+    endif()
+
+    set(
+        NCR2_FACTORY_SLOT_SYSTEM_SOURCE
+        ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051/system_MIMXRT1051.c
+    )
+    add_executable(
+        ncr2_factory_slot_app
+        EXCLUDE_FROM_ALL
+        factory_slot/src/startup.S
+        app/src/effect_runtime.c
+        app/src/effects_basic.c
+        app/src/main.c
+        app/src/program_runtime.c
+        app/src/program_selector.c
+        app/src/programs_builtin.c
+        ${NCR2_FACTORY_SLOT_SYSTEM_SOURCE}
+    )
+    target_include_directories(
+        ncr2_factory_slot_app
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/app/include
+    )
+    target_include_directories(
+        ncr2_factory_slot_app
+        SYSTEM PRIVATE
+            ${NCR2_MCUX_SDK_ROOT}/core/CMSIS/Core/Include
+            ${NCR2_MCUX_SDK_ROOT}/core/devices/MIMXRT1051
+    )
+    target_compile_definitions(
+        ncr2_factory_slot_app
+        PRIVATE
+            CPU_MIMXRT1051DVL6B
+    )
+    set_source_files_properties(
+        ${NCR2_FACTORY_SLOT_SYSTEM_SOURCE}
+        PROPERTIES COMPILE_OPTIONS "-w"
+    )
+    ncr2_firmware_target(
+        ncr2_factory_slot_app
+        ${CMAKE_CURRENT_SOURCE_DIR}/factory_slot/ncr2_factory_slot.ld
+    )
+    target_link_options(ncr2_factory_slot_app PRIVATE -Wl,-n)
+endif()
 
 if(NCR2_BUILD_MCUX_USB_ADAPTER)
     if(NOT EXISTS

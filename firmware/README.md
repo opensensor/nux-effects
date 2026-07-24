@@ -61,6 +61,8 @@ Implemented:
 - an opt-in, copyright-neutral factory Metal bridge that validates the
   preserved vectors, copies the engine to ITCM, and reproduces the stock
   handoff without embedding factory bytes.
+- an opt-in source application linked to the recovered factory ITCM slot ABI,
+  with a strict post-link checker and paired OEM-DFU/Metal-restore packer.
 
 Not implemented:
 
@@ -227,6 +229,39 @@ preserved Metal vectors at `0x600c0000`, copies `0x1e000` bytes to ITCM, and
 branches to the audited factory reset vector. See
 [FACTORY_BRIDGE.md](../docs/hardware/FACTORY_BRIDGE.md) for the cross-reference
 audit and corrected metadata layout.
+
+## Build the source factory-slot application
+
+This transition target runs source-owned code through the still-recoverable
+factory launcher. It is excluded from the default build and currently has no
+audio or target-visible diagnostics:
+
+```sh
+cmake -S firmware -B build/factory-slot -G Ninja \
+  -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/firmware/cmake/arm-none-eabi-toolchain.cmake" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNCR2_BUILD_FACTORY_SLOT_APP=ON \
+  -DNCR2_MCUX_SDK_ROOT="$PWD/third_party/mcux-sdk-workspace"
+cmake --build build/factory-slot --target ncr2_factory_slot_app
+python3 tools/check_factory_slot.py \
+  build/factory-slot/ncr2_factory_slot_app.elf
+```
+
+When the private verified dump is present, an offline BINA plus a paired
+static-Metal restore can be produced with:
+
+```sh
+python3 tools/nux_dfu.py make-factory-slot \
+  dump1.bin \
+  build/factory-slot/ncr2_factory_slot_app.bin \
+  build/factory-slot/source-slot-OFFLINE-ONLY.bina \
+  build/factory-slot/metal-restore.bina
+```
+
+Do not stream the source package yet. It is a structurally valid launch image,
+not a useful or approved pedal image. See
+[FACTORY_SLOT_APP.md](../docs/hardware/FACTORY_SLOT_APP.md).
 
 ## Build a guarded offline full image
 

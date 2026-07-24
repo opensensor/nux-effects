@@ -24,6 +24,9 @@ in [docs/app/EFFECT_RUNTIME.md](docs/app/EFFECT_RUNTIME.md).
 The copyright-neutral diagnostic path that chain-loads the preserved factory
 Metal engine is documented in
 [docs/hardware/FACTORY_BRIDGE.md](docs/hardware/FACTORY_BRIDGE.md).
+The source-built ITCM application target that matches the recovered factory
+launcher ABI is documented in
+[docs/hardware/FACTORY_SLOT_APP.md](docs/hardware/FACTORY_SLOT_APP.md).
 
 ## Current hardware facts
 
@@ -89,6 +92,14 @@ copying ITCM routines or entering C services. This source-controls FPU access,
 watchdog/SysTick cleanup, and instruction-cache enable instead of relying on
 unknown power-on state. A full application MPU/data-cache policy remains a
 later audio-BSP gate.
+
+An additional opt-in transition target now links the open application directly
+for the factory engine-slot ABI: vectors at ITCM zero, DTCM stack, pinned
+`SystemInit`, and a hard `0x1e000` copy limit. The recovered OEM updater packer
+can wrap it in a validated BINA stream and emits a byte-identical Metal restore
+alongside it. This is an offline packaging milestone, not a flash candidate:
+the source image does not initialize audio or any target-visible diagnostics.
+
 The application now has an allocation-free extensible effect registry,
 caller-sized processing chains, validated program/bank catalogs, and a
 generic program selector. Its default five-second navigation gesture
