@@ -21,9 +21,12 @@ an explicit board-support package, not more hooks into proprietary binaries.
 The finished pedal should:
 
 1. Cold-boot reliably into a low-latency audio application.
-2. Provide Delay, Reverb, Modulation, and Drive/Amp modes from source.
-3. Change modes live, from RAM, without rebooting or erasing NOR.
-4. Use a five-second footswitch hold to advance through the four modes.
+2. Provide an extensible catalog of source effects; Delay, Reverb,
+   Modulation, and Drive/Amp are the initial baseline, not a fixed list.
+3. Compose multiple effects into programs and change programs live, from RAM,
+   without rebooting or erasing NOR.
+4. Use configurable control gestures; the initial default is a five-second
+   footswitch hold to advance to the next program in the current catalog.
 5. Expose all controls through a descriptor-driven parameter system so new
    effects can be added without rewriting the control layer.
 6. Accept recoverable firmware updates over USB.
@@ -74,7 +77,8 @@ ROM -> open recovery bootloader -> selected application slot
                                       +-- platform/BSP
                                       +-- audio engine
                                       +-- control engine
-                                      +-- four effect graphs
+                                      +-- extensible effect registry
+                                      +-- program/graph engine
                                       +-- USB MIDI/editor
 ```
 
@@ -82,11 +86,13 @@ The bootloader owns validation, recovery USB, updates, and rollback. The
 application owns all real-time audio and user interaction. The application
 does not erase firmware sectors during normal operation.
 
-The four modes are not separate boot images. They are four DSP graphs in one
-application. Changing mode is a parameter/state transition:
+Effects are not separate boot images. Any number of registered source effects
+can be instantiated in caller-sized program chains, later generalized to
+validated graphs with parallel routing. Changing program is a RAM state
+transition:
 
 ```text
-footswitch hold -> choose next graph -> crossfade -> update LEDs
+control/MIDI/editor event -> prepare program -> crossfade -> update UI
 ```
 
 There is no reset and no flash operation in this path.
@@ -241,8 +247,8 @@ A magic/inverse one-shot mailbox uses retained `SRC_GPR8`/`SRC_GPR9`
 (`0x400f803c–0x400f8043`) for application-requested recovery after a warm
 reset. The MCUXpresso SDK documents SRC GPR retention through reset, and the
 factory-engine zero-wear prototype has validated it with `NVIC_SystemReset`
-on this pedal. Live switching among Delay, Reverb, Modulation, and Drive
-remains application RAM state and does not use this mailbox or write flash.
+on this pedal. Live effect/program switching remains application RAM state
+and does not use this mailbox or write flash.
 
 Pending-image confirmation uses a separate retained mailbox in SRC
 GPR3–GPR6. The bootloader publishes the pending slot and exact journal
@@ -328,20 +334,17 @@ The actual sample rate, bit depth, SAI master/slave roles, MCLK/BCLK/LRCLK
 ratios, slot width, and DMA block length must be measured or recovered before
 this interface is frozen.
 
-## 7. Four-mode DSP design
+## 7. Extensible DSP and program design
 
-One top-level engine owns four effect graphs:
+One top-level engine owns an extensible descriptor registry. Each effect has
+a stable vendor/effect key, context size/alignment, lifecycle callbacks,
+parameter schema, and in-place block processor. Programs instantiate any
+number of registered effects subject to explicit memory, CPU, and latency
+budgets. The initial implementation is an ordered chain; the ABI permits a
+later graph planner for splits, parallel paths, and mixers.
 
-```c
-enum effect_mode {
-    EFFECT_DELAY,
-    EFFECT_REVERB,
-    EFFECT_MODULATION,
-    EFFECT_DRIVE,
-};
-```
-
-All graph storage is preallocated. A mode switch:
+All active-program storage is preallocated from caller-provided DTCM and
+SDRAM arenas. A program switch:
 
 1. stops feeding new input into the old graph;
 2. initializes or restores the target graph state;
@@ -351,7 +354,7 @@ All graph storage is preallocated. A mode switch:
 
 No firmware sector is touched.
 
-Initial source algorithms:
+Initial source effect families:
 
 - Delay: stereo delay, filtering, feedback, optional tap modulation.
 - Reverb: algorithmic FDN/Schroeder-style network using external SDRAM.
@@ -366,7 +369,7 @@ proprietary DSP code or coefficient tables.
 
 ### Parameter descriptors
 
-Each mode publishes data rather than hard-coded knob logic:
+Each effect publishes data rather than hard-coded knob logic:
 
 ```c
 struct parameter_descriptor {
@@ -380,7 +383,8 @@ struct parameter_descriptor {
 ```
 
 The control layer maps physical knobs and MIDI CC to these descriptors. This
-lets the same UI drive different modes and makes a desktop editor possible.
+lets the same UI drive different programs and makes a desktop editor
+possible.
 
 ### Footswitch behavior
 
@@ -520,33 +524,37 @@ Gate:
 - measured latency, level, noise, and channel polarity documented;
 - no startup/shutdown pop at normal amplifier gain.
 
-### Phase 5 — controls and live four-mode shell
+### Phase 5 — controls and extensible live-program shell
 
 Work:
 
 - filtered ADC scanning;
 - debounced footswitch state machines;
-- five-second hold mode cycling;
-- LED mode indication;
-- four pass-through graph placeholders with crossfade.
+- configurable navigation gestures with a five-second hold default;
+- program/bank indication;
+- descriptor registry and caller-sized pass-through program chains;
+- click-free crossfade between prepared programs.
 
 Gate:
 
-- all four modes cycle repeatedly without reset;
+- catalogs larger than four programs navigate repeatedly without reset;
+- programs with multiple simultaneous effect nodes remain deterministic;
 - no flash changes occur during a 10,000-cycle automated switch test;
 - no click larger than the agreed threshold at graph transitions.
 
 ### Phase 6 — DSP effects
 
-Implement and test in this order:
+Implement the first reusable primitives and reference effects in this order:
 
-1. Delay
-2. Modulation
-3. Drive
-4. Reverb
+1. gain, mix, filters, and clipping
+2. delay-line and modulation primitives
+3. dynamics and drive models
+4. algorithmic reverb
+5. pitch/time, multi-band, and convolution effects as budgets permit
 
 Reverb is last because it exercises the largest state and most complicated
-stability/tail behavior.
+stability/tail behavior. This sequence establishes test infrastructure; it
+does not close the registry to later community effects.
 
 Gate for each effect:
 
@@ -667,7 +675,8 @@ the C ABI between bootloader, platform, and application.
 - analog loopback into an audio interface;
 - latency, gain, frequency response, THD+N, and noise measurement;
 - repeated power cuts during update and preset commit;
-- long-duration four-mode switching with flash contents hashed before/after.
+- long-duration multi-program/bank switching with flash contents hashed
+  before/after.
 
 ## 13. Immediate next work package
 
@@ -690,7 +699,7 @@ implementation session should:
 7. Wire the compile-checked WDOG1 adapter into the RAM/debug trial path and
    target-test timeout, confirmation, hard-fault, and three-attempt rollback.
 8. Map the remaining audio codec, SAI, eDMA, ADC, GPIO, mute, and bypass
-   details before implementing the four-mode source DSP application.
+   details before connecting the extensible source DSP application.
 
 The first physical open-firmware test should prove only boot, watchdog,
 recovery USB, and rollback. Audio comes after recovery is independently

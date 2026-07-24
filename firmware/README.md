@@ -38,6 +38,10 @@ Implemented:
   FlexSPI adapter with an ITCM-only command call graph;
 - a combined, deliberately nonbootable hardware link probe joining the board,
   USB, FlexSPI, recovery, and journal layers;
+- an allocation-free effect registry and caller-sized processing-chain
+  runtime with no fixed effect-count limit;
+- a RAM-only program selector whose configurable default gesture is a
+  five-second hold and which operates on any runtime catalog size;
 - a tested adapter from that NOR policy to the recovery engine and
   power-loss-safe boot journal;
 - a guarded full-chip packer that starts from the verified factory dump;

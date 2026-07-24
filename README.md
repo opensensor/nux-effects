@@ -7,8 +7,8 @@ The long-term target is a source-level programmable pedal with:
 
 - a recoverable open bootloader;
 - A/B application updates over USB;
-- live Delay, Reverb, Modulation, and Drive modes;
-- mode changes in RAM without flash wear;
+- an extensible registry of source effects and caller-sized DSP chains;
+- RAM-resident programs and banks with flash-free live changes;
 - a board-support package for the i.MX RT1051 hardware; and
 - reproducible host tools, firmware images, and tests.
 
@@ -19,6 +19,8 @@ The offline source boot chain and build instructions are in
 [firmware/README.md](firmware/README.md).
 The independent open recovery wire format is documented in
 [docs/protocol/OPEN_RECOVERY_PROTOCOL.md](docs/protocol/OPEN_RECOVERY_PROTOCOL.md).
+The allocation-free application effect ABI and program model are documented
+in [docs/app/EFFECT_RUNTIME.md](docs/app/EFFECT_RUNTIME.md).
 
 ## Current hardware facts
 
@@ -74,3 +76,7 @@ read-only backend and host-tested for forced recovery, pending trials,
 sequence-bound application confirmation, immediate rejection, rollback, and
 emergency slot fallback. An opt-in eight-second WDOG1 trial adapter compiles
 in the nonbootable hardware probe but is not wired into the default image.
+The application now has an allocation-free extensible effect registry,
+caller-sized processing chains, and a generic program selector. Its default
+five-second navigation gesture operates on a runtime catalog size and has no
+four-effect assumption.

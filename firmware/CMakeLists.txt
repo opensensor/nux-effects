@@ -116,7 +116,9 @@ target_link_options(ncr2_bootloader PRIVATE -Wl,-n)
 add_executable(
     ncr2_app
     app/src/startup.S
+    app/src/effect_runtime.c
     app/src/main.c
+    app/src/program_selector.c
     bootloader/src/boot_recovery_request.c
     bootloader/src/boot_trial.c
     platform/ncr2/src/ncr2_boot_request.c
@@ -124,6 +126,7 @@ add_executable(
 target_include_directories(
     ncr2_app
     PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/app/include
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
         ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
