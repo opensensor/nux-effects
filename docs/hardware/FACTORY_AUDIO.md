@@ -135,6 +135,28 @@ TCDs enable scatter/gather without a major-loop interrupt. This strongly
 suggests that the RX completion callback owns the eight-frame DSP cadence and
 fills the corresponding TX half.
 
+The recovered TX DMAMUX value contains `CHCFG.TRIG`, although the RT1050
+periodic-trigger feature is defined only for DMA channels 0 through 3 and TX
+uses channel 16. The compatibility target preserves the executed value
+exactly. Hardware diagnostics route channel 16 in normal peripheral-request
+mode and may enable its major-loop interrupt temporarily so TX consumption is
+measured independently of the RX callback.
+
+## Converter register image
+
+The same executed Metal path pulses GPIO1_IO26 low-to-high, then writes all
+AK4619 registers from `0x00` through `0x14` in ascending order. Its source
+table at DTCM address `0x20000000` is:
+
+```text
+37 ac 1c 03 22 22 30 30 30 30 00 55 00 00 18 18 18 18 04 05 0a
+```
+
+This is the source-firmware compatibility target. In particular, register
+`0x12` is `0x04`, not the inferred `0x00` used by the first open codec
+configuration. Reproducing only a datasheet-derived subset is insufficient
+when diagnosing an otherwise live SAI/eDMA path.
+
 ## Reproduction
 
 With a verified private dump and a carved factory Metal image:

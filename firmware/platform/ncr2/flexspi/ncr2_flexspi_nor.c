@@ -58,11 +58,15 @@ _Static_assert(
 #define NCR2_FLEXSPI_RESET_POLL_LIMIT UINT32_C(200000)
 #define NCR2_FLASH_BUSY_POLL_LIMIT UINT32_C(200000)
 #define NCR2_FLASH_STATUS_ERROR_LIMIT UINT32_C(3)
+#define NCR2_FLEXSPI_TX_WATERMARK UINT32_C(3)
+#define NCR2_FLEXSPI_TX_FIFO_BYTES \
+    (UINT32_C(8) * (NCR2_FLEXSPI_TX_WATERMARK + UINT32_C(1)))
 #define NCR2_FLEXSPI_ERROR_MASK \
     (FLEXSPI_INTR_AHBCMDERR_MASK | \
      FLEXSPI_INTR_IPCMDERR_MASK | \
      FLEXSPI_INTR_AHBCMDGE_MASK | \
      FLEXSPI_INTR_IPCMDGE_MASK)
+#define NCR2_FLEXSPI_SAFE_PROGRAM_BYTES NCR2_FLEXSPI_TX_FIFO_BYTES
 
 typedef struct ncr2_flexspi_context {
     uint8_t initialized;
@@ -130,9 +134,29 @@ static NCR2_RAMFUNC status_t ram_transfer(
         FLEXSPI_FLSHCR2_CLRINSTRPTR_MASK;
     FLEXSPI->INTR =
         NCR2_FLEXSPI_ERROR_MASK |
-        FLEXSPI_INTR_IPCMDDONE_MASK;
+        FLEXSPI_INTR_IPCMDDONE_MASK |
+        FLEXSPI_INTR_IPTXWE_MASK |
+        FLEXSPI_INTR_IPRXWA_MASK;
     FLEXSPI->IPCR0 = flash_offset;
-    FLEXSPI->IPTXFCR |= FLEXSPI_IPTXFCR_CLRIPTXF_MASK;
+    if (command_type == kFLEXSPI_Write ||
+        command_type == kFLEXSPI_Config) {
+        /*
+         * Make one watermark equal the recovery protocol's whole 32-byte
+         * payload. Physical testing showed stale data at bytes 8 and 24
+         * when a page program reused TFDR[0] across smaller watermark
+         * fills, even when the fills were split into separate commands.
+         * Loading TFDR[0..7] once removes that reuse altogether.
+         */
+        FLEXSPI->IPTXFCR =
+            (FLEXSPI->IPTXFCR &
+             ~(FLEXSPI_IPTXFCR_TXWMRK_MASK |
+               FLEXSPI_IPTXFCR_TXDMAEN_MASK)) |
+            FLEXSPI_IPTXFCR_TXWMRK(
+                NCR2_FLEXSPI_TX_WATERMARK) |
+            FLEXSPI_IPTXFCR_CLRIPTXF_MASK;
+    } else {
+        FLEXSPI->IPTXFCR |= FLEXSPI_IPTXFCR_CLRIPTXF_MASK;
+    }
     FLEXSPI->IPRXFCR |= FLEXSPI_IPRXFCR_CLRIPRXF_MASK;
     if (command_type == kFLEXSPI_Read ||
         command_type == kFLEXSPI_Write ||
@@ -627,10 +651,13 @@ static int backend_program_page(void *opaque,
 {
     ncr2_flexspi_context_t *context =
         (ncr2_flexspi_context_t *)opaque;
+    const uint8_t *input = (const uint8_t *)source;
     uint32_t interrupt_state;
     uint32_t page_offset =
         address & (NCR2_NOR_PAGE_SIZE - UINT32_C(1));
-    int status;
+    uint32_t remaining = length;
+    uint32_t flash_offset = address - NCR2_FLASH_XIP_BASE;
+    int status = 0;
 
     if (context == NULL ||
         context->initialized == UINT8_C(0) ||
@@ -643,11 +670,27 @@ static int backend_program_page(void *opaque,
     }
     interrupt_state = __get_PRIMASK();
     __disable_irq();
-    status =
-        ram_program_page(
-            address - NCR2_FLASH_XIP_BASE,
-            (const uint8_t *)source,
-            length);
+    /*
+     * Keep every page program within the configured 32-byte TX watermark,
+     * so ram_transfer fills TFDR[0..7] exactly once per command.
+     */
+    while (remaining != UINT32_C(0)) {
+        const uint32_t chunk =
+            remaining < NCR2_FLEXSPI_SAFE_PROGRAM_BYTES
+                ? remaining
+                : NCR2_FLEXSPI_SAFE_PROGRAM_BYTES;
+
+        status = ram_program_page(
+            flash_offset,
+            input,
+            chunk);
+        if (status != 0) {
+            break;
+        }
+        flash_offset += chunk;
+        input += chunk;
+        remaining -= chunk;
+    }
     __set_PRIMASK(interrupt_state);
     return status;
 }

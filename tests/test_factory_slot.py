@@ -113,7 +113,15 @@ class FactorySlotSourceTests(unittest.TestCase):
         self.assertIn("IOMUXC_GPIO_AD_B1_10_GPIO1_IO26", source)
         self.assertIn("NCR2_GPIO1_INITIAL_HIGH", source)
         self.assertIn("NCR2_GPIO2_INITIAL_HIGH", source)
+        self.assertIn("NCR2_GPIO2_AUDIO_ACTIVE_HIGH", source)
+        self.assertIn(
+            "NCR2_GPIO2_IO24_MASK | NCR2_GPIO2_IO25_MASK",
+            source,
+        )
         self.assertIn("NCR2_BOARD_RELEASE_DELAY_US", source)
+        self.assertIn("IOMUXC_GPIO_AD_B1_05_GPIO1_IO21", source)
+        self.assertIn("GPIO1->GDIR &= ~NCR2_GPIO1_IO21_MASK", source)
+        self.assertIn("ncr2_factory_board_switch_pressed(", source)
 
     def test_bicolor_indicator_uses_recovered_active_low_pair(self):
         header = (
@@ -222,7 +230,81 @@ class FactorySlotSourceTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn("ncr2_factory_board_set_relay(", application)
-        self.assertIn("g_delay_line[", application)
+        self.assertIn(
+            "ncr2_factory_board_set_relay(UINT8_C(1))",
+            application,
+        )
+        self.assertIn(
+            "ncr2_factory_board_set_relay(UINT8_C(0))",
+            application,
+        )
+        self.assertIn("NCR2_SAFE_OUTPUT_PEAK", application)
+        self.assertNotIn("NCR2_DRIVE_LIMIT", application)
+        self.assertNotIn("NCR2_DRIVE_GATE", application)
+        self.assertIn("process_selected_effect(", application)
+        self.assertIn("shape_drive(", application)
+        self.assertIn("clamp_symmetric(", application)
+        self.assertIn("NCR2_EFFECT_RAMP_STEP", application)
+        self.assertIn("NCR2_SELECTOR_RAMP_STEP", application)
+        self.assertIn("initialize_knob_adc()", application)
+        self.assertIn("sample_knobs(", application)
+        self.assertIn(
+            "NCR2_KNOB_AMOUNT_CHANNEL UINT32_C(5)",
+            application,
+        )
+        self.assertIn(
+            "NCR2_KNOB_CHARACTER_CHANNEL UINT32_C(8)",
+            application,
+        )
+        self.assertIn(
+            "NCR2_KNOB_SELECTOR_CHANNEL UINT32_C(9)",
+            application,
+        )
+        self.assertIn(
+            "NCR2_KNOB_OUTPUT_CHANNEL UINT32_C(11)",
+            application,
+        )
+        self.assertIn("NCR2_SWITCH_DEBOUNCE_MS", application)
+        self.assertIn("ncr2_factory_board_switch_pressed()", application)
+        self.assertIn("debounced_pressed != raw_pressed", application)
+        self.assertIn("g_hardware_app_enable_effect =", application)
+        self.assertIn("NCR2_LED_OFF", application)
+        self.assertIn("g_hardware_app_ready = UINT32_C(0x46555A5A)", application)
+        self.assertIn("ncr2_codec_probe(", application)
+        self.assertIn(
+            "ncr2_factory_board_restore_audio_active(",
+            application,
+        )
+        self.assertIn(
+            "NCR2_FACTORY_BOARD_CANDIDATE_COUNT);",
+            application,
+        )
+        self.assertIn("NCR2_AK4619_REG_DAC_ROUTE", application)
+        self.assertIn("NCR2_AK4619_DAC_ROUTE_FACTORY", application)
+        self.assertLess(
+            application.index("ncr2_codec_configure()"),
+            application.index(
+                "ncr2_factory_board_restore_audio_active("
+            ),
+        )
+        restore_index = application.index(
+            "ncr2_factory_board_restore_audio_active("
+        )
+        self.assertLess(
+            restore_index,
+            application.index(
+                "g_hardware_app_codec_power_readback = power;",
+                restore_index,
+            ),
+        )
+        # A codec held in reset never acknowledges, so PDN
+        # candidates must be released before the scan.
+        self.assertLess(
+            application.index(
+                "ncr2_factory_board_release_reset_candidates()"
+            ),
+            application.index("ncr2_codec_probe("),
+        )
         self.assertIn("BOOT_RECOVERY_REQUEST_MAGIC", application)
         self.assertIn("NCR2_BOOT_MAILBOX_ADDRESS", application)
         self.assertIn("NVIC_SystemReset()", application)
@@ -232,6 +314,11 @@ class FactorySlotSourceTests(unittest.TestCase):
         # sweep, so every wait must service it and the image must mark
         # itself healthy on the way in.
         self.assertIn("boot_trial_arm_confirmation(", application)
+        self.assertIn(
+            "g_hardware_app_trial_status == BOOT_TRIAL_OK",
+            application,
+        )
+        self.assertIn("clear_recovery_request()", application)
         self.assertIn("WDOG1->WSR = NCR2_WDOG_REFRESH_FIRST", application)
         self.assertIn("WDOG1->WSR = NCR2_WDOG_REFRESH_SECOND", application)
         self.assertNotIn(
@@ -249,14 +336,50 @@ class FactorySlotSourceTests(unittest.TestCase):
         # Silence must never be ambiguous: audio init and live DMA
         # blocks are reported on the indicator before the relay test.
         self.assertIn("g_hardware_app_processed_blocks", application)
+        self.assertIn(
+            "g_ncr2_factory_audio_counters.tx_blocks",
+            application,
+        )
         self.assertLess(
             application.index("flash_code("),
-            application.index("NCR2_METER_DURATION_MS;"),
+            application.index("ncr2_codec_probe("),
         )
 
         # A latching relay coil expects a brief pulse, not a steady
         # drive, so the relay hunt must not reuse the LED dwell times.
         self.assertIn("NCR2_INPUT_FLOOR", application)
+
+    def test_hardware_app_exposes_eight_bounded_effects(self):
+        application = (
+            ROOT
+            / "firmware"
+            / "hardware_app"
+            / "src"
+            / "main.c"
+        ).read_text()
+
+        for effect in (
+            "NCR2_EFFECT_OVERDRIVE",
+            "NCR2_EFFECT_FUZZ",
+            "NCR2_EFFECT_TREMOLO",
+            "NCR2_EFFECT_OCTAVE_FUZZ",
+            "NCR2_EFFECT_BIT_CRUSHER",
+            "NCR2_EFFECT_RING_MOD",
+            "NCR2_EFFECT_SLAPBACK",
+            "NCR2_EFFECT_ECHO",
+        ):
+            self.assertIn(effect, application)
+        self.assertIn("NCR2_EFFECT_COUNT UINT32_C(8)", application)
+        self.assertIn("quantize_selector(", application)
+        self.assertIn("NCR2_SELECTOR_HYSTERESIS", application)
+        self.assertIn('section(".sdram_bss")', application)
+        self.assertIn("initialize_effect_processor()", application)
+        self.assertIn(
+            "NCR2_SAFE_OUTPUT_PEAK INT32_C(0x10000000)",
+            application,
+        )
+        self.assertIn("NCR2_OVERDRIVE_Q12_RANGE", application)
+        self.assertIn("NCR2_FUZZ_Q12_RANGE", application)
 
     def test_source_audio_emulator_is_offline_only(self):
         source = (

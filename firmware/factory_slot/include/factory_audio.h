@@ -26,6 +26,7 @@ typedef struct ncr2_factory_audio_counters
     volatile uint32_t rx_blocks;
     volatile uint32_t copied_blocks;
     volatile uint32_t unexpected_interrupts;
+    volatile uint32_t tx_blocks;
 } ncr2_factory_audio_counters_t;
 
 extern ncr2_factory_audio_counters_t

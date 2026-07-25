@@ -11,6 +11,14 @@
 #define NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH 0
 #endif
 
+#ifndef NCR2_FACTORY_AUDIO_TX_DIAGNOSTIC
+#define NCR2_FACTORY_AUDIO_TX_DIAGNOSTIC 0
+#endif
+
+#ifndef NCR2_FACTORY_AUDIO_TX_NORMAL_DMAMUX
+#define NCR2_FACTORY_AUDIO_TX_NORMAL_DMAMUX 0
+#endif
+
 #if NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH
 
 #define NCR2_AUDIO_RX_DMA_CHANNEL UINT32_C(0)
@@ -26,7 +34,11 @@
 #define NCR2_AUDIO_MINOR_BYTES UINT32_C(64)
 #define NCR2_AUDIO_MAJOR_ITERATIONS UINT16_C(2)
 #define NCR2_AUDIO_RX_TCD_CONTROL UINT16_C(0x0012)
+#if NCR2_FACTORY_AUDIO_TX_DIAGNOSTIC
+#define NCR2_AUDIO_TX_TCD_CONTROL UINT16_C(0x0012)
+#else
 #define NCR2_AUDIO_TX_TCD_CONTROL UINT16_C(0x0010)
+#endif
 
 typedef struct ncr2_audio_tcd
 {
@@ -253,7 +265,16 @@ static void configure_dma(void)
         NCR2_AUDIO_RX_DMAMUX_SOURCE;
     DMAMUX->CHCFG[NCR2_AUDIO_TX_DMA_CHANNEL] =
         NCR2_AUDIO_DMAMUX_ENABLE |
+#if !NCR2_FACTORY_AUDIO_TX_NORMAL_DMAMUX
+        /*
+         * Preserve the executed factory value in the reusable compatibility
+         * target. The RT1050 reference manual only defines periodic trigger
+         * mode for channels 0..3, so the hardware diagnostic deliberately
+         * omits this bit on channel 16 and uses ordinary peripheral-request
+         * routing.
+         */
         NCR2_AUDIO_DMAMUX_TX_TRIGGER |
+#endif
         NCR2_AUDIO_DMAMUX_SOURCE_COMPAT_FLAG |
         NCR2_AUDIO_TX_DMAMUX_SOURCE;
 
@@ -315,10 +336,25 @@ uint16_t ncr2_factory_audio_init(void)
 void DMA0_DMA16_IRQHandler(void)
 {
 #if NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH
+    const uint32_t pending = DMA0->INT;
     uint32_t completed;
     uint32_t next;
 
-    if ((DMA0->INT & UINT32_C(1)) == 0U) {
+    /*
+     * Channels 0 and 16 share this vector. The recovered TX TCD did not
+     * request interrupts, but the hardware diagnostic enables its major
+     * interrupt so "the RX callback filled a TX buffer" cannot be mistaken
+     * for proof that channel 16 consumed it.
+     */
+    if ((pending & (UINT32_C(1) << NCR2_AUDIO_TX_DMA_CHANNEL)) != 0U) {
+        DMA0->CINT = (uint8_t)NCR2_AUDIO_TX_DMA_CHANNEL;
+        ++g_ncr2_factory_audio_counters.tx_blocks;
+    }
+
+    if ((pending & (UINT32_C(1) << NCR2_AUDIO_RX_DMA_CHANNEL)) == 0U) {
+        if ((pending & (UINT32_C(1) << NCR2_AUDIO_TX_DMA_CHANNEL)) != 0U) {
+            return;
+        }
         ++g_ncr2_factory_audio_counters.unexpected_interrupts;
         DMA0->CINT = UINT8_C(0x40);
         return;

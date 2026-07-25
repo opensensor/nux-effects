@@ -19,6 +19,7 @@
 #define NCR2_GPIO1_IO24_MASK (UINT32_C(1) << 24)
 #define NCR2_GPIO1_IO26_MASK (UINT32_C(1) << 26)
 #define NCR2_GPIO1_IO31_MASK (UINT32_C(1) << 31)
+#define NCR2_GPIO1_IO21_MASK (UINT32_C(1) << 21)
 #define NCR2_GPIO1_CONTROL_MASK \
     (NCR2_GPIO1_IO24_MASK | \
      NCR2_GPIO1_IO26_MASK | \
@@ -40,10 +41,15 @@
      NCR2_GPIO2_IO26_MASK | \
      NCR2_GPIO2_IO27_MASK)
 #define NCR2_GPIO2_INITIAL_HIGH NCR2_GPIO2_IO26_MASK
+#define NCR2_GPIO2_AUDIO_ACTIVE_HIGH \
+    (NCR2_GPIO2_IO23_MASK | \
+     NCR2_GPIO2_IO25_MASK | \
+     NCR2_GPIO2_IO27_MASK)
 
 #define NCR2_BOARD_RELEASE_DELAY_US UINT32_C(100000)
 #define NCR2_MICROSECONDS_PER_SECOND UINT32_C(1000000)
 #define NCR2_MILLISECONDS_PER_SECOND UINT32_C(1000)
+#define NCR2_SWITCH_PAD_CONFIG UINT32_C(0x70b0)
 
 static void configure_control_pins(void)
 {
@@ -55,6 +61,7 @@ static void configure_control_pins(void)
     CLOCK_EnableClock(kCLOCK_Gpio1);
     CLOCK_EnableClock(kCLOCK_Gpio2);
 
+    IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_05_GPIO1_IO21, 1U);
     IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_08_GPIO1_IO24, 0U);
     IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_10_GPIO1_IO26, 0U);
     IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_15_GPIO1_IO31, 0U);
@@ -65,6 +72,9 @@ static void configure_control_pins(void)
     IOMUXC_SetPinMux(IOMUXC_GPIO_B1_10_GPIO2_IO26, 0U);
     IOMUXC_SetPinMux(IOMUXC_GPIO_B1_11_GPIO2_IO27, 0U);
 
+    IOMUXC_SetPinConfig(
+        IOMUXC_GPIO_AD_B1_05_GPIO1_IO21,
+        NCR2_SWITCH_PAD_CONFIG);
     IOMUXC_SetPinConfig(
         IOMUXC_GPIO_AD_B1_08_GPIO1_IO24,
         UINT32_C(0x10b0));
@@ -232,6 +242,7 @@ uint16_t ncr2_factory_board_prepare_audio(void)
         (GPIO2->DR & ~NCR2_GPIO2_CONTROL_MASK) |
         NCR2_GPIO2_INITIAL_HIGH;
     GPIO1->GDIR |= NCR2_GPIO1_CONTROL_MASK;
+    GPIO1->GDIR &= ~NCR2_GPIO1_IO21_MASK;
     GPIO2->GDIR |= NCR2_GPIO2_CONTROL_MASK;
     return NCR2_FACTORY_BOARD_OK;
 #else
@@ -286,6 +297,17 @@ void ncr2_factory_board_set_indicator(
 #endif
 }
 
+uint8_t ncr2_factory_board_switch_pressed(void)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    return ((GPIO1->PSR & NCR2_GPIO1_IO21_MASK) == UINT32_C(0))
+               ? UINT8_C(1)
+               : UINT8_C(0);
+#else
+    return UINT8_C(0);
+#endif
+}
+
 uint32_t ncr2_factory_board_candidate_count(void)
 {
 #if NCR2_FACTORY_SLOT_BOARD_CONTROLS
@@ -309,6 +331,64 @@ void ncr2_factory_board_restore_idle(void)
 #endif
 }
 
+void ncr2_factory_board_restore_audio_active(
+    uint32_t reset_candidate)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    uint32_t gpio1_high =
+        NCR2_GPIO1_INITIAL_HIGH | NCR2_GPIO1_IO26_MASK;
+    uint32_t gpio2_high = NCR2_GPIO2_AUDIO_ACTIVE_HIGH;
+
+    /*
+     * This is the state reached by the stock runtime after SAI1 starts, not
+     * the earlier state captured at the end of the audio initializer. A
+     * continued factory trace shows GPIO2_IO23/25/27 asserted while
+     * IO11/24/26 are all cleared. IO24/25 are the complementary audio-route
+     * controls; this selects the ordinary bypass state.
+     *
+     * GPIO1_IO26 has completed its factory low-to-high release transition.
+     * The reset_candidate argument is retained for the bounded PDN
+     * diagnostic below; normal operation passes the candidate count and
+     * reproduces the exact traced runtime state.
+     */
+    if (reset_candidate < ncr2_factory_board_candidate_count()) {
+        const board_output_candidate_t *candidate =
+            &g_candidates[reset_candidate];
+
+        if (candidate->port == GPIO1) {
+            gpio1_high |= candidate->mask;
+        } else if (candidate->port == GPIO2) {
+            gpio2_high |= candidate->mask;
+        }
+    }
+    GPIO1->DR =
+        (GPIO1->DR & ~NCR2_GPIO1_CONTROL_MASK) |
+        gpio1_high;
+    GPIO2->DR =
+        (GPIO2->DR & ~NCR2_GPIO2_CONTROL_MASK) |
+        gpio2_high;
+    __DSB();
+#else
+    (void)reset_candidate;
+#endif
+}
+
+void ncr2_factory_board_set_candidate(
+    uint32_t index,
+    uint8_t high)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    if (index >= ncr2_factory_board_candidate_count()) {
+        return;
+    }
+    drive_candidate(&g_candidates[index], high);
+    __DSB();
+#else
+    (void)index;
+    (void)high;
+#endif
+}
+
 void ncr2_factory_board_pulse_candidate(uint32_t index)
 {
 #if NCR2_FACTORY_SLOT_BOARD_CONTROLS
@@ -327,14 +407,51 @@ void ncr2_factory_board_pulse_candidate(uint32_t index)
 #endif
 }
 
+void ncr2_factory_board_release_reset_candidates(void)
+{
+#if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    /*
+     * The AK4619 holds its control interface in reset while PDN is low, so
+     * a scan would find nothing if PDN happens to be one of the traced
+     * outputs. Keep the traced bypass route selected: IO25 high, IO24 low.
+     */
+    for (uint32_t index = UINT32_C(0);
+         index < ncr2_factory_board_candidate_count();
+         ++index) {
+        if (g_candidates[index].port == GPIO2 &&
+            g_candidates[index].mask == NCR2_GPIO2_IO24_MASK) {
+            continue;
+        }
+        drive_candidate(&g_candidates[index], UINT8_C(1));
+    }
+    __DSB();
+#endif
+}
+
 void ncr2_factory_board_set_relay(uint8_t engaged)
 {
 #if NCR2_FACTORY_SLOT_BOARD_CONTROLS
+    /*
+     * The stock bank updater at ITCM 0x5532 treats IO24 and IO25 as a
+     * complementary route pair. Its ordinary startup state selects IO25
+     * (IO24 low, IO25 high); changing the effect-state byte selects IO24
+     * (IO25 low, IO24 high). Driving IO24 high without clearing IO25, as
+     * the first source tests did, creates a state the stock firmware never
+     * uses and does not switch the audio route.
+     *
+     * Update the pair with one DR write so the controls are never left
+     * asserted together.
+     */
+    uint32_t route =
+        GPIO2->DR &
+        ~(NCR2_GPIO2_IO24_MASK | NCR2_GPIO2_IO25_MASK);
+
     if (engaged != UINT8_C(0)) {
-        GPIO2->DR_SET = NCR2_GPIO2_IO24_MASK;
+        route |= NCR2_GPIO2_IO24_MASK;
     } else {
-        GPIO2->DR_CLEAR = NCR2_GPIO2_IO24_MASK;
+        route |= NCR2_GPIO2_IO25_MASK;
     }
+    GPIO2->DR = route;
     __DSB();
 #else
     (void)engaged;

@@ -25,6 +25,7 @@ class FactoryAudioEvidenceTests(unittest.TestCase):
         self.assertIn("VERIFIED_DUMP_SHA256", source)
         self.assertIn("factory engine does not match", source)
         self.assertIn("audio_init_complete", source)
+        self.assertIn("factory_codec_registers_00_14", source)
         self.assertNotIn("/dev/hidraw", source)
         self.assertNotIn("usb.core", source)
 

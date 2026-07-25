@@ -40,6 +40,13 @@ void ncr2_factory_board_set_indicator(
     ncr2_factory_indicator_state_t state);
 
 /*
+ * Read the primary active-low footswitch used by the open bootloader's
+ * physical recovery gesture. The board setup leaves this pad as an input,
+ * so the effect application can use the same confirmed wiring at runtime.
+ */
+uint8_t ncr2_factory_board_switch_pressed(void);
+
+/*
  * Every GPIO output the stock engine is known to drive, in a fixed order.
  * A candidate is identified on hardware by its one-based index, which the
  * diagnostic emits as a blink count.
@@ -58,6 +65,25 @@ uint32_t ncr2_factory_board_candidate_count(void);
 void ncr2_factory_board_restore_idle(void);
 
 /*
+ * Restore the post-SAI state observed by continuing the stock runtime:
+ * GPIO1_IO26 released, GPIO2_IO23/25/27 high, and GPIO2_IO11/24/26 low.
+ * IO24/25 form the complementary audio-route pair, so this is the ordinary
+ * bypass state. Pass the candidate count in normal operation. A lower value
+ * is retained only for the bounded PDN diagnostic.
+ */
+void ncr2_factory_board_restore_audio_active(
+    uint32_t reset_candidate);
+
+/*
+ * Change one traced output without disturbing the other candidates. This is
+ * used by the hardware diagnostic to lower each plausible PDN briefly and
+ * identify the one that resets the codec register map.
+ */
+void ncr2_factory_board_set_candidate(
+    uint32_t index,
+    uint8_t high);
+
+/*
  * Drive one candidate to the inverse of its recovered factory startup
  * level and leave the others idle. Toggling relative to the factory level
  * rather than assuming active-low keeps the sweep polarity-agnostic: an
@@ -73,11 +99,17 @@ void ncr2_factory_board_pulse_candidate(uint32_t index);
 void ncr2_factory_board_delay_ms(uint32_t milliseconds);
 
 /*
- * GPIO2_IO24 drives the relay identified by the v0.4.9 hunt. It idles low
- * in the recovered factory startup levels and the coil energises when the
- * pin is driven high. What the relay actually switches is not yet known:
- * the click proves the coil moves, not which way it routes.
+ * Select the stock complementary GPIO2_IO24/IO25 relay state. Bypass selects
+ * IO25 (IO24 low); engaged selects IO24 (IO25 low). The pair must never be
+ * left high together.
  */
 void ncr2_factory_board_set_relay(uint8_t engaged);
+
+/*
+ * Drive every traced output high except IO24, while keeping the complementary
+ * route on IO25. Used before probing the control bus, since a codec held in
+ * reset never acknowledges.
+ */
+void ncr2_factory_board_release_reset_candidates(void);
 
 #endif

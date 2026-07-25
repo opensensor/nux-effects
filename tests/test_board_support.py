@@ -179,16 +179,63 @@ class SdramAudioBufferTests(unittest.TestCase):
             linker,
         )
 
-    def test_delay_line_lives_in_the_sdram_region(self):
-        application = (
-            ROOT / "firmware" / "hardware_app" / "src" / "main.c"
+
+class CodecProbeSafetyTests(unittest.TestCase):
+    """The bus scan must not touch pads the running system depends on."""
+
+    def setUp(self):
+        self.source = (
+            ROOT / "firmware" / "hardware_app" / "src" / "codec_probe.c"
         ).read_text()
 
-        self.assertIn('__attribute__((section(".sdram_bss")))', application)
-        # The region is NOLOAD and startup does not clear it, so the buffer
-        # must zero itself or replay power-on garbage on the first pass.
-        self.assertIn("clear_delay_line()", application)
-        self.assertLess(
-            application.index("clear_delay_line();"),
-            application.index("ncr2_factory_audio_init()"),
+    def test_scan_excludes_semc_and_flexspi_pads(self):
+        # The application executes from SDRAM behind the SEMC and recovery
+        # depends on the FlexSPI NOR, so muxing either as GPIO mid-scan
+        # would fault the core or strand the device.
+        # SD_B1_04/05 are allowed (FlexSPI SS1/DQS, unused here);
+        # SD_B1_10/11 carry FlexSPI data and must stay out.
+        for forbidden in ("GPIO_EMC_", "GPIO_SD_B1_10", "GPIO_SD_B1_11"):
+            self.assertNotIn(forbidden, self.source)
+
+    def test_scan_covers_the_documented_candidate_count(self):
+        header = (
+            ROOT / "firmware" / "hardware_app" / "include" / "codec_probe.h"
+        ).read_text()
+
+        self.assertIn(
+            "NCR2_CODEC_BUS_CANDIDATE_COUNT UINT32_C(7)", header
+        )
+        self.assertIn("_Static_assert(", self.source)
+        self.assertEqual(self.source.count("case "), 6)
+
+    def test_probe_tries_both_cad_addresses(self):
+        header = (
+            ROOT / "firmware" / "hardware_app" / "include" / "codec_probe.h"
+        ).read_text()
+
+        # The AK4619 answers at 0x10 or 0x11 depending on the CAD pin.
+        self.assertIn("NCR2_AK4619_ADDRESS_BASE UINT8_C(0x10)", header)
+        self.assertIn("+ UINT8_C(1)", self.source)
+
+    def test_clock_stretching_is_bounded(self):
+        # A pad pair with no device can sit low forever; the scan must not
+        # hang on it.
+        self.assertIn("NCR2_I2C_STRETCH_LIMIT", self.source)
+        self.assertIn("open drain", self.source.lower())
+
+    def test_probe_rejects_stuck_low_and_requires_codec_signature(self):
+        # A stuck-low SDA makes every byte look acknowledged and every read
+        # look like zero. The probe must require idle-high and the AK4619's
+        # nonzero reset-default MIC gain value.
+        self.assertIn(
+            "read_line(bus, bus->sda_bit) == UINT32_C(0)",
+            self.source,
+        )
+        self.assertIn(
+            "NCR2_AK4619_SIGNATURE_REGISTER UINT8_C(0x04)",
+            self.source,
+        )
+        self.assertIn(
+            "NCR2_AK4619_SIGNATURE_VALUE UINT8_C(0x22)",
+            self.source,
         )

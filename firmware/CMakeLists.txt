@@ -416,6 +416,7 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
         EXCLUDE_FROM_ALL
         hardware_app/src/startup.S
         hardware_app/src/main.c
+        hardware_app/src/codec_probe.c
         bootloader/src/boot_trial.c
         factory_slot/src/audio_passthrough.c
         factory_slot/src/board_control.c
@@ -425,6 +426,7 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
     target_include_directories(
         ncr2_hardware_audio_app
         PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/hardware_app/include
             ${CMAKE_CURRENT_SOURCE_DIR}/factory_slot/include
             ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
             ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include
@@ -443,6 +445,13 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
             CPU_MIMXRT1051DVL6B
             NCR2_FACTORY_SLOT_AUDIO_PASSTHROUGH=1
             NCR2_FACTORY_SLOT_BOARD_CONTROLS=1
+            # Count actual channel-16 completions in the hardware diagnostic.
+            # The reusable factory-compatible target keeps the recovered TX
+            # TCD value and does not enable this extra interrupt.
+            NCR2_FACTORY_AUDIO_TX_DIAGNOSTIC=1
+            # Channel 16 cannot use the channel-0..3 PIT periodic-trigger
+            # feature. Route SAI1 TX requests directly in this diagnostic.
+            NCR2_FACTORY_AUDIO_TX_NORMAL_DMAMUX=1
             # GPIO1_IO24 and GPIO1_IO31 are the bicolour indicator,
             # confirmed on hardware by the v0.4.8 sweep. They route
             # nothing, so the active-low effect hypothesis is retired.

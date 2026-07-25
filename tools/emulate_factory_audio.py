@@ -80,6 +80,10 @@ class WatchRange:
 
 
 WATCH_RANGES = (
+    WatchRange(0x400C4000, 0x400C4100, "ADC1"),
+    WatchRange(0x400C8000, 0x400C8100, "ADC2"),
+    WatchRange(0x403B0000, 0x403B0200, "ADC_ETC"),
+    WatchRange(0x401F8000, 0x401F8700, "IOMUXC"),
     WatchRange(0x40384000, 0x40384100, "SAI1"),
     WatchRange(0x40388000, 0x40388100, "SAI2"),
     WatchRange(0x4038C000, 0x4038C100, "SAI3"),
@@ -393,6 +397,7 @@ def emulate(
     engine: bytes,
     instruction_limit: int,
     trace_gpio: bool,
+    continue_after_audio: bool,
 ) -> int:
     emulator = _build_emulator(dump, engine)
     counts: Counter[int] = Counter()
@@ -480,17 +485,15 @@ def emulate(
                 "main_tick",
             )
         elif address == 0x00008110:
-            # The factory audio initializer has enabled both SAI1 directions
-            # and their DMA requests.  Stop before unrelated post-init code
-            # reaches hardware that this narrow model intentionally omits.
             fixes["audio_init_complete"] += 1
             audio_init_complete = True
-            current.emu_stop()
+            if not continue_after_audio:
+                # The factory audio initializer has enabled both SAI1
+                # directions and their DMA requests.  The normal contract
+                # trace stops before unrelated post-init hardware.
+                current.emu_stop()
 
-        if (
-            not audio_init_complete
-            and instruction_count >= instruction_limit
-        ):
+        if instruction_count >= instruction_limit:
             current.emu_stop()
 
     def on_write(
@@ -612,6 +615,14 @@ def emulate(
         "factory_audio_state=" +
         bytes(emulator.mem_read(0x20009524, 0x200)).hex()
     )
+    print(
+        "factory_codec_registers_00_14=" +
+        bytes(emulator.mem_read(0x20000000, 0x15)).hex()
+    )
+    print(
+        "factory_codec_readback_00_14=" +
+        bytes(emulator.mem_read(0x2000002A, 0x15)).hex()
+    )
     print("gpio_state:")
     for region in GPIO_WATCH_RANGES:
         print(
@@ -650,6 +661,14 @@ def main() -> int:
         action="store_true",
         help="print every GPIO write in addition to the final pin state",
     )
+    parser.add_argument(
+        "--continue-after-audio",
+        action="store_true",
+        help=(
+            "continue into the factory main loop after SAI initialization; "
+            "use with a bounded instruction limit for peripheral tracing"
+        ),
+    )
     arguments = parser.parse_args()
 
     try:
@@ -661,6 +680,7 @@ def main() -> int:
         engine,
         arguments.instruction_limit,
         arguments.trace_gpio,
+        arguments.continue_after_audio,
     )
 
 

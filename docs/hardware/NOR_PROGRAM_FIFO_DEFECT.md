@@ -1,7 +1,8 @@
 # Known defect: FlexSPI IP page program corrupts alternating FIFO fills
 
-Status: open. Discovered 2026-07-24 on physical hardware, once the FlexSPI
-port-size fix made slot writes reachable for the first time.
+Status: second candidate fix implemented; awaiting physical validation.
+Discovered 2026-07-24 on physical hardware, once the FlexSPI port-size fix
+made slot writes reachable for the first time.
 
 ## Symptom
 
@@ -58,7 +59,7 @@ Every image installed on this pedal so far was written by NXP's RAM
 flashloader, which does its own programming and has passed a full 8 MiB
 SHA-256 readback every time, so no installed image is affected.
 
-## Candidate fixes
+## First attempted fix
 
 1. Constrain each IP write transfer to a single watermark unit so the fill
    loop never runs more than once, at the cost of one IP command per eight
@@ -67,9 +68,26 @@ SHA-256 readback every time, so no installed image is affected.
    decide when the previous entry has been consumed.
 3. Raise the TX watermark so a whole 32-byte host chunk fits one fill.
 
-Option 1 is the smallest change and is bounded by the protocol's 32-byte
-payload; it should be measured before committing, since a full-chip restore
-would issue four times as many IP commands.
+Option 1 was tested physically on 2026-07-25 and was insufficient. The first
+real-manifest attempt left byte 24 at `0x15` instead of `0x05`. Reprogramming
+the same data did not clear that bit. A new 32-byte all-zero block at the next
+address reproduced the original signature:
+
+```
+0000000000000000110000000000000000000000000000001000000000000000
+```
+
+That rules out a worn flash cell and shows that the controller state persists
+across the separate eight-byte commands.
+
+## Current candidate fix
+
+Option 3 is now implemented. The driver sets `IPTXFCR[TXWMRK]` to three, so
+one watermark represents 32 bytes, clears any pending TX/RX watermark flags,
+and limits each page-program command to that same 32-byte size.
+`ram_transfer` therefore loads `TFDR[0..7]` once and never reuses a FIFO word
+within the command. The fix must pass the physical inactive-slot reproduction
+below before normal A/B upload is considered approved.
 
 ## Reproducing
 

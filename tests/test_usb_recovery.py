@@ -92,6 +92,25 @@ class UsbRecoverySafetyTests(unittest.TestCase):
         )
 
         self.assertIn("NCR2_LUT_SEQUENCE_READ_DATA 10U", source)
+        # Physical writes corrupted the first byte of alternating FIFO
+        # fills. A complete 32-byte recovery payload must fit in one
+        # watermark so TFDR[0] is not reused during the command.
+        self.assertIn(
+            "NCR2_FLEXSPI_TX_WATERMARK UINT32_C(3)",
+            source,
+        )
+        self.assertIn(
+            "NCR2_FLEXSPI_SAFE_PROGRAM_BYTES "
+            "NCR2_FLEXSPI_TX_FIFO_BYTES",
+            source,
+        )
+        self.assertIn(
+            "FLEXSPI_IPTXFCR_TXWMRK(\n"
+            "                NCR2_FLEXSPI_TX_WATERMARK)",
+            source,
+        )
+        self.assertIn("FLEXSPI_INTR_IPTXWE_MASK |", source)
+        self.assertIn("status = ram_program_page(", source)
         # ISEQID is four bits and the LUT is 64 words; both limits are
         # enforced at compile time after a sequence index of 16 silently
         # aliased to sequence 0 on hardware.
