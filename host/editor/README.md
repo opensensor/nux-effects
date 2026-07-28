@@ -1,0 +1,72 @@
+# Open Effect Lab
+
+A local page for designing NCR-2 programs, writing new effects in C, and
+hearing them before anything is built or flashed.
+
+```sh
+python3 host/editor/server.py --open
+```
+
+Requires a host C compiler (`cc`) and nothing else — no packages, no
+network access, no device.
+
+## What it does
+
+- **Registry** — every effect in the compiled registry, with the names,
+  units, ranges, and context sizes read back from its descriptor.
+- **Program** — order effects into a chain and set parameters. Controls
+  are bounded by the descriptor, so the page cannot ask for a value the
+  firmware would reject.
+- **Preview** — plays the chain's output through the *actual* firmware
+  runtime compiled on this machine. Test signals include plucked notes,
+  an open chord, sine, sweep, noise, an impulse, a file, or the
+  microphone. `Space` plays; `B` swaps between dry and processed.
+- **Effect source** — a compilable ABI template to start from, compiler
+  diagnostics with file and line, and a real-time rule scan.
+- **Hardware app presets** — an opt-in toggle that lifts the eight
+  fixed-point panel presets (Shine Drive, Wall Fuzz, Breathe Vibe,
+  Echoes Tape, Rage Drive, Cocked Wah, Guerrilla Trem, Whammy Fuzz) out
+  of `firmware/hardware_app/src/main.c` and previews them with Amount,
+  Character, and Level as the raw ADC counts the firmware reads. That
+  file is never modified. Previews are pinned to 48 kHz, one preset per
+  chain, and cannot be exported — on the device they are a `switch`, not
+  registry effects.
+- **Export** — `effects_<name>.c`, its header, and a
+  `programs_builtin.c`-style program block, ready to review and commit.
+
+The charts show input and output waveforms in separate lanes, their
+spectra, and the chain's response to a −1 → +1 ramp. The measurements
+table reports the runtime's own validation status codes, non-finite
+samples, peak and RMS, arena use, and host-relative block timing.
+
+## What it does not do
+
+It does not re-implement any DSP in JavaScript, talk to a pedal, write
+to the repository, or build a flashable image. Host block timing is not
+the on-target CPU budget gate.
+
+## Layout
+
+| Path | Role |
+|---|---|
+| `server.py` | loopback HTTP server and JSON/binary API |
+| `builder.py` | compiles firmware + authored sources, runs the binary |
+| `codegen.py` | generated configuration and exported firmware C |
+| `hardware_app.py` | lifts the hardware application's fixed-point presets |
+| `rt_rules.py` | heuristic real-time rule scan |
+| `native/editor_host.c` | harness that renders through the real chain |
+| `static/` | the page |
+
+Compiled previews are cached under `build/effect-editor/`, keyed by the
+exact sources and configuration; delete that directory to force a clean
+rebuild.
+
+Design notes and the safety model are in
+[docs/app/EFFECT_EDITOR.md](../../docs/app/EFFECT_EDITOR.md).
+
+## Safety
+
+The server compiles and runs C that the page submits. Keep it on
+loopback (it refuses other addresses), run it on a machine you trust,
+and review authored sources as you would any code you are about to
+execute.

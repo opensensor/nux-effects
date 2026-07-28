@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Effect Lab — NCR-2</title>
+    <link rel="stylesheet" href="/static/editor.css" />
+  </head>
+  <body data-theme="auto">
+    <header class="top">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Open Effect Lab</h1>
+          <p class="brand-sub">
+            Previews compile and run <code>firmware/app</code>'s own
+            effect runtime on this machine.
+          </p>
+        </div>
+      </div>
+
+      <div class="engine" role="group" aria-label="Engine format">
+        <label>
+          <span>Sample rate</span>
+          <select id="sample-rate"></select>
+        </label>
+        <label>
+          <span>Block</span>
+          <select id="block-frames"></select>
+        </label>
+        <label>
+          <span>Channels</span>
+          <select id="channels">
+            <option value="1">1 — mono</option>
+            <option value="2" selected>2 — stereo</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          id="theme-toggle"
+          class="ghost"
+          title="Switch light and dark"
+        >
+          Theme
+        </button>
+      </div>
+
+      <div class="status" id="status" role="status" aria-live="polite">
+        <span class="status-dot" data-state="idle"></span>
+        <span id="status-text">Starting…</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" aria-labelledby="registry-title">
+        <div class="panel-head">
+          <h2 id="registry-title">Registry</h2>
+          <button type="button" id="new-effect" class="primary small">
+            New effect
+          </button>
+        </div>
+        <p class="panel-note">
+          Descriptors are read back from the compiled registry, so the
+          names, units, and ranges below are the firmware's own.
+        </p>
+        <label class="toggle" id="hardware-app-toggle" hidden>
+          <input type="checkbox" id="hardware-app" />
+          <span>
+            <b>Hardware app presets</b>
+            <em id="hardware-app-note"></em>
+          </span>
+        </label>
+        <div id="registry" class="registry"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="chain-title">
+        <div class="panel-head">
+          <h2 id="chain-title">Program</h2>
+          <button type="button" id="verify" class="ghost small">
+            Validate
+          </button>
+        </div>
+        <div class="program-identity">
+          <label>
+            <span>Name</span>
+            <input id="program-name" type="text" value="Untitled" />
+          </label>
+          <label>
+            <span>Program id</span>
+            <input id="program-id" type="text" value="0x00000001" />
+          </label>
+        </div>
+        <div id="chain" class="chain"></div>
+        <p class="panel-note" id="chain-empty">
+          An empty chain is a valid program: it renders as passthrough.
+          Add an effect from the registry to hear a difference.
+        </p>
+      </section>
+
+      <section class="panel preview" aria-labelledby="preview-title">
+        <div class="panel-head">
+          <h2 id="preview-title">Preview</h2>
+          <div class="transport">
+            <button type="button" id="play" class="primary small">
+              Play
+            </button>
+            <button type="button" id="ab" class="ghost small" disabled>
+              Hear dry
+            </button>
+          </div>
+        </div>
+
+        <div class="signal-row">
+          <label>
+            <span>Test signal</span>
+            <select id="signal">
+              <option value="pluck">Guitar pluck</option>
+              <option value="chord">Open chord</option>
+              <option value="sine">Sine 220 Hz</option>
+              <option value="sweep">Sweep 40 Hz → 8 kHz</option>
+              <option value="noise">Noise burst</option>
+              <option value="impulse">Impulse</option>
+              <option value="file">Audio file…</option>
+              <option value="mic">Microphone…</option>
+            </select>
+          </label>
+          <label class="level">
+            <span>Input level <b id="input-level-value">−6 dB</b></span>
+            <input
+              id="input-level"
+              type="range"
+              min="-30"
+              max="0"
+              step="1"
+              value="-6"
+            />
+          </label>
+          <input id="file-input" type="file" accept="audio/*" hidden />
+        </div>
+
+        <figure class="chart">
+          <figcaption>
+            <span>Waveform</span>
+            <span class="legend">
+              <i class="swatch swatch-in"></i>Input
+              <i class="swatch swatch-out"></i>Output
+            </span>
+          </figcaption>
+          <canvas id="waveform" height="176"></canvas>
+        </figure>
+
+        <figure class="chart">
+          <figcaption>
+            <span>Spectrum</span>
+            <span class="legend">
+              <i class="swatch swatch-in"></i>Input
+              <i class="swatch swatch-out"></i>Output
+            </span>
+          </figcaption>
+          <canvas id="spectrum" height="150"></canvas>
+        </figure>
+
+        <figure class="chart">
+          <figcaption>
+            <span>Transfer curve</span>
+            <span class="legend">
+              <i class="swatch swatch-out"></i>Output vs input ramp
+            </span>
+          </figcaption>
+          <canvas id="transfer" height="170"></canvas>
+          <p class="panel-note">
+            A −1 → +1 ramp through the chain. Memoryless effects draw
+            their shaping curve; effects with state (filters, delays)
+            draw their response to that ramp instead.
+          </p>
+        </figure>
+
+        <div class="metrics">
+          <h3>Measured on this render</h3>
+          <table id="metrics">
+            <tbody></tbody>
+          </table>
+          <p class="panel-note">
+            Block timing is host-relative. The Cortex-M7 budget gate in
+            <code>PROGRAMMABLE_PEDAL_PLAN.md</code> is measured on the
+            device, not here.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <section class="drawer" aria-labelledby="source-title">
+      <div class="drawer-head">
+        <h2 id="source-title">Effect source</h2>
+        <div class="drawer-controls">
+          <select id="source-select" aria-label="Source file"></select>
+          <button type="button" id="compile" class="primary small">
+            Compile
+          </button>
+          <button type="button" id="export" class="ghost small">
+            Export C
+          </button>
+          <button type="button" id="delete-source" class="ghost small">
+            Remove
+          </button>
+        </div>
+      </div>
+      <div class="drawer-body">
+        <textarea
+          id="source"
+          spellcheck="false"
+          autocomplete="off"
+          wrap="off"
+          aria-label="Effect C source"
+        ></textarea>
+        <div class="feedback">
+          <div class="feedback-block">
+            <h3>Compiler</h3>
+            <ul id="diagnostics" class="findings">
+              <li class="empty">No compiler output yet.</li>
+            </ul>
+          </div>
+          <div class="feedback-block">
+            <h3>
+              Real-time rules
+              <span class="hint" title="Heuristic source scan">?</span>
+            </h3>
+            <ul id="lint" class="findings">
+              <li class="empty">Nothing flagged.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <dialog id="export-dialog">
+      <form method="dialog">
+        <h2>Generated firmware sources</h2>
+        <p class="panel-note">
+          Nothing is written to the repository. Copy a file, review it,
+          and add it to <code>firmware/app</code> yourself.
+        </p>
+        <div id="export-files"></div>
+        <menu>
+          <button value="close" class="ghost">Close</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script src="/static/editor.js" type="module"></script>
+  </body>
+</html>
