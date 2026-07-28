@@ -60,6 +60,12 @@ void ram_recovery_main(void)
      */
     g_recovery.backend.store_boot_state =
         unusable_store_boot_state;
+    /*
+     * Reading the front panel touches no flash state, so it is safe to offer
+     * even in the whole-flash session that erased the image.
+     */
+    g_recovery.backend.read_knobs =
+        ncr2_board_recovery_read_knobs;
     boot_state_default(&g_recovery.state);
     recovery_engine_init(
         &g_recovery.engine,

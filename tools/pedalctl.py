@@ -34,6 +34,25 @@ PACKET_STRUCT = struct.Struct("<IBBHIIIHHII32s")
 INFO_STRUCT = struct.Struct("<IIIII4BII")
 NOR_DIAGNOSTIC_STRUCT = struct.Struct("<IHBBIIIiHHI")
 NOR_DIAGNOSTIC_MAGIC = 0x444F524E
+KNOB_SAMPLE_STRUCT = struct.Struct("<I4HHH4B4BII")
+KNOB_SAMPLE_MAGIC = 0x424F4E4B
+KNOB_NAMES = ("amount", "character", "selector", "output")
+KNOB_SELECTOR_INDEX = 2
+EFFECT_COUNT = 8
+CALIBRATION_WARNINGS = {
+    "duplicate-detents": (
+        "two detents measured identically; the selector cannot tell them "
+        "apart. Check the knob and re-run."
+    ),
+    "non-monotonic": (
+        "the ladder is not monotonic across positions. Nearest-detent "
+        "matching still works, but verify the wiring."
+    ),
+    "gap-not-clear-of-noise": (
+        "the smallest gap is not comfortably wider than the resting noise, "
+        "so hysteresis margins must stay small."
+    ),
+}
 
 SLOT_A = 0
 SLOT_B = 1
@@ -42,8 +61,15 @@ FLAG_FULL_FLASH = 0x8000
 FULL_FLASH_UNLOCK = 0x45504957
 CAPABILITY_FULL_FLASH_RAM = 0x20
 CAPABILITY_PROGRESSIVE_FULL_ERASE = 0x40
+CAPABILITY_VERIFIED_FULL_PROGRAM = 0x80
+CAPABILITY_KNOB_SAMPLE = 0x100
 FULL_FLASH_ERASE_CHUNK_SIZE = 0x10000
 FULL_FLASH_CONFIRMATION = "WIPE-ALL-8MIB"
+HANDOFF_CONFIRMATION = "ERASE-BOOT-REGION"
+BOOT_REGION_SIZE = 0x10000
+OPEN_RECOVERY_HID_ID = "HID_ID=0003:00009527:0000C157"
+DEFAULT_HIDRAW_SYSFS = Path("/sys/class/hidraw")
+DEFAULT_HIDRAW_DEVICES = Path("/dev")
 
 COMMANDS = {
     "get-info": 1,
@@ -58,6 +84,7 @@ COMMANDS = {
     "begin-full-flash": 10,
     "erase-full-flash": 11,
     "finalize-full-flash": 12,
+    "read-knobs": 13,
 }
 COMMAND_NAMES = {value: name for name, value in COMMANDS.items()}
 
@@ -238,6 +265,66 @@ class NorDiagnostics:
         return diagnostics
 
 
+@dataclasses.dataclass(frozen=True)
+class KnobSample:
+    values: tuple[int, ...]
+    selector_min: int
+    selector_max: int
+    channels: tuple[int, ...]
+    burst: int
+    valid: int
+    adc_bits: int
+    sample_index: int
+
+    @property
+    def selector(self) -> int:
+        return self.values[KNOB_SELECTOR_INDEX]
+
+    @property
+    def selector_spread(self) -> int:
+        return self.selector_max - self.selector_min
+
+    @classmethod
+    def decode(cls, payload: bytes) -> "KnobSample":
+        if len(payload) != KNOB_SAMPLE_STRUCT.size:
+            raise RecoveryError(
+                f"READ_KNOBS returned {len(payload)} bytes, expected "
+                f"{KNOB_SAMPLE_STRUCT.size}"
+            )
+        fields = KNOB_SAMPLE_STRUCT.unpack(payload)
+        if fields[0] != KNOB_SAMPLE_MAGIC:
+            raise RecoveryError(
+                f"bad knob sample magic {fields[0]:#x}"
+            )
+        return cls(
+            values=fields[1:5],
+            selector_min=fields[5],
+            selector_max=fields[6],
+            channels=fields[7:11],
+            burst=fields[11],
+            valid=fields[12],
+            adc_bits=fields[13],
+            sample_index=fields[15],
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "sample_index": self.sample_index,
+            "valid": bool(self.valid),
+            "adc_bits": self.adc_bits,
+            "burst": self.burst,
+            "selector_min": self.selector_min,
+            "selector_max": self.selector_max,
+            "selector_spread": self.selector_spread,
+            "knobs": {
+                name: {"channel": channel, "value": value}
+                for name, channel, value in zip(
+                    KNOB_NAMES, self.channels, self.values, strict=True
+                )
+            },
+        }
+
+
 class ReportTransport(Protocol):
     def exchange(self, report: bytes) -> bytes:
         """Send one 64-byte output report and receive one input report."""
@@ -375,6 +462,10 @@ class RecoveryClient:
         response = self._exchange(Packet(COMMANDS["get-log"]))
         return NorDiagnostics.decode(response.payload)
 
+    def read_knobs(self) -> KnobSample:
+        response = self._exchange(Packet(COMMANDS["read-knobs"]))
+        return KnobSample.decode(response.payload)
+
     def begin(self, slot: int, image_size: int) -> int:
         if slot not in (SLOT_A, SLOT_B):
             raise RecoveryError(f"invalid target slot {slot}")
@@ -457,8 +548,26 @@ class RecoveryClient:
     def erase_full_flash(
         self,
         progress: Callable[[int, int], None] | None = None,
+        *,
+        limit: int | None = None,
     ) -> None:
+        """Erase the whole NOR, or only its first `limit` bytes.
+
+        A bounded erase is how the boot-region handoff hands control to the
+        immutable NXP ROM without touching the rest of the chip.
+        """
         total = ncr2_rom_recover.FLASH_SIZE
+        if limit is not None:
+            if not 0 < limit <= total:
+                raise RecoveryError(
+                    f"erase limit {limit:#x} is outside 0..{total:#x}"
+                )
+            if limit % FULL_FLASH_ERASE_CHUNK_SIZE != 0:
+                raise RecoveryError(
+                    "erase limit must be a multiple of "
+                    f"{FULL_FLASH_ERASE_CHUNK_SIZE:#x}"
+                )
+            total = limit
         for offset in range(0, total, FULL_FLASH_ERASE_CHUNK_SIZE):
             response = self._session_command(
                 "erase-full-flash",
@@ -480,9 +589,18 @@ class RecoveryClient:
         self,
         image: bytes,
         progress: Callable[[int, int], None] | None = None,
+        *,
+        chunk_size: int = PAYLOAD_SIZE,
+        start_offset: int = 0,
     ) -> None:
-        for offset in range(0, len(image), PAYLOAD_SIZE):
-            chunk = image[offset : offset + PAYLOAD_SIZE]
+        if not 1 <= chunk_size <= PAYLOAD_SIZE:
+            raise RecoveryError(
+                f"write chunk size must be 1..{PAYLOAD_SIZE} bytes"
+            )
+        if not 0 <= start_offset <= len(image):
+            raise RecoveryError("write start offset is outside the image")
+        for offset in range(start_offset, len(image), chunk_size):
+            chunk = image[offset : offset + chunk_size]
             self._session_command(
                 "write-chunk",
                 offset=offset,
@@ -553,6 +671,63 @@ def info_to_dict(info: RecoveryInfo) -> dict[str, object]:
     }
 
 
+def discover_recovery_device(
+    sysfs_root: Path = DEFAULT_HIDRAW_SYSFS,
+    device_root: Path = DEFAULT_HIDRAW_DEVICES,
+) -> Path:
+    candidates: list[Path] = []
+
+    try:
+        hidraw_entries = sorted(sysfs_root.glob("hidraw*"))
+    except OSError as error:
+        raise RecoveryError(
+            f"cannot scan recovery devices in {sysfs_root}: {error}"
+        ) from error
+    for entry in hidraw_entries:
+        try:
+            identity = (entry / "device" / "uevent").read_text().upper()
+        except OSError:
+            continue
+        if OPEN_RECOVERY_HID_ID in identity:
+            candidates.append(device_root / entry.name)
+
+    if not candidates:
+        raise RecoveryError(
+            "no 9527:c157 recovery device found; enter Open Recover "
+            "or pass --device explicitly"
+        )
+    if len(candidates) != 1:
+        raise RecoveryError(
+            "multiple 9527:c157 recovery devices found: " +
+            ", ".join(str(candidate) for candidate in candidates)
+        )
+    return candidates[0]
+
+
+def recovery_transport(args: argparse.Namespace) -> HidrawTransport:
+    auto_discovered = args.device is None
+    device = (
+        discover_recovery_device()
+        if auto_discovered
+        else args.device
+    )
+    if auto_discovered:
+        print(
+            f"Open Recover: {device}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    # Auto-discovery is restricted to the borrowed 9527:c157 HID identity.
+    # The first command is still versioned GET_INFO; a stock updater cannot
+    # pass packet decoding and therefore cannot reach a mutating command.
+    return HidrawTransport(
+        device,
+        args.timeout,
+        args.allow_borrowed_nux_id or auto_discovered,
+    )
+
+
 def command_inspect_slot(args: argparse.Namespace) -> None:
     image, manifest = validate_slot_image(args.image)
     print(
@@ -575,21 +750,13 @@ def command_inspect_slot(args: argparse.Namespace) -> None:
 
 
 def command_info(args: argparse.Namespace) -> None:
-    with HidrawTransport(
-        args.device,
-        args.timeout,
-        args.allow_borrowed_nux_id,
-    ) as transport:
+    with recovery_transport(args) as transport:
         info = RecoveryClient(transport, args.retries).get_info()
     print(json.dumps(info_to_dict(info), indent=2, sort_keys=True))
 
 
 def command_diagnostics(args: argparse.Namespace) -> None:
-    with HidrawTransport(
-        args.device,
-        args.timeout,
-        args.allow_borrowed_nux_id,
-    ) as transport:
+    with recovery_transport(args) as transport:
         diagnostics = RecoveryClient(
             transport, args.retries
         ).get_log()
@@ -600,6 +767,163 @@ def command_diagnostics(args: argparse.Namespace) -> None:
             sort_keys=True,
         )
     )
+
+
+def require_knob_capability(client: RecoveryClient) -> None:
+    info = client.get_info()
+    if not info.capabilities & CAPABILITY_KNOB_SAMPLE:
+        raise RecoveryError(
+            "this recovery firmware does not advertise knob sampling "
+            f"(capabilities {info.capabilities:#x}); flash a build that "
+            "includes READ_KNOBS first"
+        )
+
+
+def format_knob_line(sample: KnobSample) -> str:
+    columns = " ".join(
+        f"{name}={value:>4}"
+        for name, value in zip(KNOB_NAMES, sample.values, strict=True)
+    )
+    return (
+        f"#{sample.sample_index:<6} {columns}  "
+        f"selector_spread={sample.selector_spread:>3}"
+        f"{'' if sample.valid else '  [INVALID]'}"
+    )
+
+
+def command_knobs(args: argparse.Namespace) -> None:
+    with recovery_transport(args) as transport:
+        client = RecoveryClient(transport, args.retries)
+        require_knob_capability(client)
+        if not args.watch:
+            sample = client.read_knobs()
+            print(json.dumps(sample.as_dict(), indent=2, sort_keys=True))
+            return
+
+        print(
+            "Live front-panel capture. Rotate the Type knob through every "
+            "detent.\nPress Ctrl-C to stop.",
+            file=sys.stderr,
+        )
+        previous_index = None
+        try:
+            while True:
+                sample = client.read_knobs()
+                if sample.sample_index != previous_index:
+                    previous_index = sample.sample_index
+                    print(format_knob_line(sample), flush=True)
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print(file=sys.stderr)
+
+
+def capture_detent(
+    client: RecoveryClient, repeats: int
+) -> tuple[int, int, int]:
+    """Return (median value, minimum seen, maximum seen) for one detent."""
+    readings: list[int] = []
+    low = 0xFFFF
+    high = 0
+    for _ in range(max(1, repeats)):
+        sample = client.read_knobs()
+        if not sample.valid:
+            raise RecoveryError(
+                "the recovery firmware reported an invalid ADC capture; "
+                "the converter did not calibrate"
+            )
+        readings.append(sample.selector)
+        low = min(low, sample.selector_min)
+        high = max(high, sample.selector_max)
+    readings.sort()
+    return readings[len(readings) // 2], low, high
+
+
+def selector_calibration_report(
+    detents: list[int], spreads: list[int]
+) -> dict[str, object]:
+    """Summarise a detent sweep and name the ways it can be unusable.
+
+    Two detents that measure the same value cannot be told apart at all. A
+    smallest gap that is not clearly wider than the resting noise leaves no
+    room for hysteresis, which is how a stepped knob ends up refusing to
+    change program.
+    """
+    ordered = sorted(detents)
+    gaps = [
+        second - first
+        for first, second in zip(ordered, ordered[1:], strict=False)
+    ]
+    minimum_gap = min(gaps) if gaps else 0
+    worst_spread = max(spreads) if spreads else 0
+    warnings: list[str] = []
+    if len(set(detents)) != len(detents):
+        warnings.append("duplicate-detents")
+    elif detents not in (ordered, ordered[::-1]):
+        warnings.append("non-monotonic")
+    if minimum_gap <= 2 * worst_spread:
+        warnings.append("gap-not-clear-of-noise")
+    return {
+        "detents": detents,
+        "sorted": ordered,
+        "gaps": gaps,
+        "minimum_gap": minimum_gap,
+        "maximum_rest_spread": worst_spread,
+        "warnings": warnings,
+    }
+
+
+def render_selector_table(detents: list[int]) -> str:
+    entries = ",\n".join(f"    UINT16_C({value})" for value in detents)
+    return (
+        "/* Measured on hardware by `pedalctl calibrate-selector`. */\n"
+        "static const uint16_t g_selector_detent"
+        f"[NCR2_EFFECT_COUNT] = {{\n{entries},\n}};"
+    )
+
+
+def command_calibrate_selector(args: argparse.Namespace) -> None:
+    with recovery_transport(args) as transport:
+        client = RecoveryClient(transport, args.retries)
+        require_knob_capability(client)
+
+        print(
+            f"Measuring all {EFFECT_COUNT} Type detents.\n"
+            "Turn the knob fully counter-clockwise to start, then step one "
+            "detent clockwise each time.\n",
+            file=sys.stderr,
+        )
+        detents: list[int] = []
+        spreads: list[int] = []
+        for position in range(EFFECT_COUNT):
+            input(
+                f"Position {position + 1}/{EFFECT_COUNT}: set the detent, "
+                "then press Enter... "
+            )
+            value, low, high = capture_detent(client, args.repeats)
+            spread = high - low
+            spreads.append(spread)
+            detents.append(value)
+            print(
+                f"  captured {value}  (burst range {low}..{high}, "
+                f"spread {spread})",
+                file=sys.stderr,
+            )
+
+    report = selector_calibration_report(detents, spreads)
+
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return
+
+    print()
+    print(f"detent values   : {report['detents']}")
+    print(f"adjacent gaps   : {report['gaps']}")
+    print(f"smallest gap    : {report['minimum_gap']} counts")
+    print(f"worst rest noise: {report['maximum_rest_spread']} counts")
+    for warning in report["warnings"]:
+        print(f"\nWARNING: {CALIBRATION_WARNINGS[warning]}")
+    print()
+    print(render_selector_table(detents))
 
 
 def parse_slot(value: str) -> int | None:
@@ -615,11 +939,7 @@ def parse_slot(value: str) -> int | None:
 
 def command_upload(args: argparse.Namespace) -> None:
     image, manifest = validate_slot_image(args.image)
-    with HidrawTransport(
-        args.device,
-        args.timeout,
-        args.allow_borrowed_nux_id,
-    ) as transport:
+    with recovery_transport(args) as transport:
         client = RecoveryClient(transport, args.retries)
         info = client.get_info()
         target = args.slot
@@ -669,6 +989,41 @@ def command_upload(args: argparse.Namespace) -> None:
     )
 
 
+def validate_full_restore_target(
+    info: RecoveryInfo,
+    image_size: int,
+) -> None:
+    if (
+        info.capabilities & CAPABILITY_FULL_FLASH_RAM
+    ) == 0:
+        raise RecoveryError(
+            "device is not the RAM-resident full-flash recovery "
+            "personality; refusing destructive command"
+        )
+    if (
+        info.capabilities &
+        CAPABILITY_PROGRESSIVE_FULL_ERASE
+    ) == 0:
+        raise RecoveryError(
+            "device lacks progressive full-flash erase; refusing the "
+            "silent monolithic erase implementation"
+        )
+    if (
+        info.capabilities &
+        CAPABILITY_VERIFIED_FULL_PROGRAM
+    ) == 0:
+        raise RecoveryError(
+            "device NOR programming is not physically verified for "
+            "full restore; refusing before erase (use the NXP ROM "
+            "flashloader recovery path)"
+        )
+    if info.flash_size != image_size:
+        raise RecoveryError(
+            f"device reports {info.flash_size} flash bytes, image has "
+            f"{image_size}"
+        )
+
+
 def command_restore_full(args: argparse.Namespace) -> None:
     if args.confirm != FULL_FLASH_CONFIRMATION:
         raise RecoveryError(
@@ -681,33 +1036,10 @@ def command_restore_full(args: argparse.Namespace) -> None:
     image = args.image.read_bytes()
     digest = bytes.fromhex(image_sha256)
 
-    with HidrawTransport(
-        args.device,
-        args.timeout,
-        args.allow_borrowed_nux_id,
-    ) as transport:
+    with recovery_transport(args) as transport:
         client = RecoveryClient(transport, args.retries)
         info = client.get_info()
-        if (
-            info.capabilities & CAPABILITY_FULL_FLASH_RAM
-        ) == 0:
-            raise RecoveryError(
-                "device is not the RAM-resident full-flash recovery "
-                "personality; refusing destructive command"
-            )
-        if (
-            info.capabilities &
-            CAPABILITY_PROGRESSIVE_FULL_ERASE
-        ) == 0:
-            raise RecoveryError(
-                "device lacks progressive full-flash erase; refusing the "
-                "silent monolithic erase implementation"
-            )
-        if info.flash_size != len(image):
-            raise RecoveryError(
-                f"device reports {info.flash_size} flash bytes, image has "
-                f"{len(image)}"
-            )
+        validate_full_restore_target(info, len(image))
 
         session = client.begin_full_flash(len(image), digest)
         print(
@@ -775,12 +1107,88 @@ def command_restore_full(args: argparse.Namespace) -> None:
     )
 
 
+def command_handoff_to_rom(args: argparse.Namespace) -> None:
+    """Erase only the boot region so the next cold start enters NXP ROM.
+
+    The open recovery NOR programmer cannot yet write reliably, so a new
+    bootloader has to be installed through the immutable ROM flashloader.
+    The ROM falls back to its serial downloader when the boot header at the
+    start of flash is blank, and erasing that one 64 KiB region is the whole
+    mechanism. Everything above it, including the factory compatibility
+    region, is left untouched.
+    """
+    if args.confirm != HANDOFF_CONFIRMATION:
+        raise RecoveryError(
+            f"boot-region erase requires --confirm {HANDOFF_CONFIRMATION}"
+        )
+    # Validate the follow-up image before making the pedal unbootable, so a
+    # bad path or hash cannot strand the device with nothing to install.
+    image_sha256 = ncr2_rom_recover.validate_flash_image(
+        args.image, args.expected_sha256
+    )
+    digest = bytes.fromhex(image_sha256)
+    image_size = args.image.stat().st_size
+
+    with recovery_transport(args) as transport:
+        client = RecoveryClient(transport, args.retries)
+        info = client.get_info()
+        if not info.capabilities & CAPABILITY_FULL_FLASH_RAM:
+            raise RecoveryError(
+                "device is not the RAM-resident recovery personality; "
+                "refusing destructive command"
+            )
+        if not info.capabilities & CAPABILITY_PROGRESSIVE_FULL_ERASE:
+            raise RecoveryError(
+                "device lacks progressive erase; refusing the silent "
+                "monolithic erase implementation"
+            )
+        if info.flash_size != image_size:
+            raise RecoveryError(
+                f"device reports {info.flash_size} flash bytes, the "
+                f"follow-up image has {image_size}"
+            )
+
+        client.begin_full_flash(image_size, digest)
+        print(
+            f"erasing the first {BOOT_REGION_SIZE // 1024} KiB only; "
+            "do not remove power",
+            file=sys.stderr,
+            flush=True,
+        )
+        client.erase_full_flash(limit=BOOT_REGION_SIZE)
+
+    print(
+        json.dumps(
+            {
+                "result": "boot-region-erased",
+                "erased_bytes": BOOT_REGION_SIZE,
+                "next_image": str(args.image),
+                "next_image_sha256": image_sha256,
+                "next_step": (
+                    "power-cycle with no footswitch held; the pedal should "
+                    "enumerate as NXP ROM 1fc9:0130, then run "
+                    "tools/ncr2_rom_recover.py flash --execute"
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def resolved_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
 def add_transport_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--device", type=resolved_path, required=True)
+    parser.add_argument(
+        "--device",
+        type=resolved_path,
+        help=(
+            "hidraw recovery node; omit to auto-discover the single "
+            "9527:c157 Open Recover device"
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument(
@@ -817,6 +1225,42 @@ def build_parser() -> argparse.ArgumentParser:
     add_transport_arguments(diagnostics_parser)
     diagnostics_parser.set_defaults(function=command_diagnostics)
 
+    knobs_parser = subparsers.add_parser(
+        "knobs",
+        help="read the four front-panel controls (non-mutating)",
+    )
+    add_transport_arguments(knobs_parser)
+    knobs_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="poll continuously and print each new capture",
+    )
+    knobs_parser.add_argument(
+        "--interval",
+        type=float,
+        default=0.1,
+        help="seconds between captures while watching (default 0.1)",
+    )
+    knobs_parser.set_defaults(function=command_knobs)
+
+    calibrate_parser = subparsers.add_parser(
+        "calibrate-selector",
+        help="measure every Type detent and emit a firmware table",
+    )
+    add_transport_arguments(calibrate_parser)
+    calibrate_parser.add_argument(
+        "--repeats",
+        type=int,
+        default=5,
+        help="captures averaged per detent (default 5)",
+    )
+    calibrate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the measurement report as JSON",
+    )
+    calibrate_parser.set_defaults(function=command_calibrate_selector)
+
     upload_parser = subparsers.add_parser(
         "upload",
         help="validate and upload an image to the inactive open A/B slot",
@@ -826,6 +1270,26 @@ def build_parser() -> argparse.ArgumentParser:
     upload_parser.add_argument("--slot", type=parse_slot, default=None)
     upload_parser.add_argument("--no-reboot", action="store_true")
     upload_parser.set_defaults(function=command_upload)
+
+    handoff_parser = subparsers.add_parser(
+        "handoff-to-rom",
+        help="erase only the 64 KiB boot region so the next cold start "
+        "enters the NXP ROM downloader",
+    )
+    add_transport_arguments(handoff_parser)
+    handoff_parser.add_argument(
+        "image",
+        type=resolved_path,
+        help="the full image to be installed afterwards; validated before "
+        "the erase so a bad path cannot strand the pedal",
+    )
+    handoff_parser.add_argument("--expected-sha256")
+    handoff_parser.add_argument(
+        "--confirm",
+        required=True,
+        help=f"must be exactly {HANDOFF_CONFIRMATION}",
+    )
+    handoff_parser.set_defaults(function=command_handoff_to_rom)
 
     restore_parser = subparsers.add_parser(
         "restore-full",

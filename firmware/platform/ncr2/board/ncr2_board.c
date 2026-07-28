@@ -3,11 +3,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "MIMXRT1051.h"
 #include "fsl_clock.h"
 #include "fsl_common.h"
 #include "fsl_gpio.h"
 #include "fsl_iomuxc.h"
 #include "ncr2_flash_layout.h"
+#include "recovery_engine.h"
 #include "recovery_usb.h"
 #include "usb.h"
 #include "usb_phy.h"
@@ -213,4 +215,205 @@ void ncr2_board_warm_reset(void *context)
     for (;;) {
         __WFI();
     }
+}
+
+/*
+ * The stock Reverb engine scans ADC1 channels 5, 8, 9 and 11 in that order
+ * and treats them as Decay, Tweak, Type and Level. Only the Type channel is
+ * a stepped ladder; recovery samples all four so a host can confirm the whole
+ * scan is alive before trusting any single reading.
+ */
+static const uint8_t g_knob_channel[NCR2_BOARD_KNOB_COUNT] = {
+    5U, 8U, 9U, 11U,
+};
+
+/* 100 kOhm keeper off, no pull, hysteresis off: the stock analog pad value. */
+#define NCR2_KNOB_PAD_CONFIG UINT32_C(0x000000b0)
+#define NCR2_KNOB_ADC_TIMEOUT UINT32_C(100000)
+#define NCR2_KNOB_DISABLED_CHANNEL 31U
+
+static uint8_t g_knob_adc_ready;
+static uint32_t g_knob_sample_index;
+
+static void knob_pads_init(void)
+{
+    CLOCK_EnableClock(kCLOCK_Iomuxc);
+    CLOCK_EnableClock(kCLOCK_Gpio1);
+    CLOCK_EnableClock(kCLOCK_Adc1);
+
+    /*
+     * The analog connection is live while the digital mux stays GPIO, which
+     * is exactly how the stock image leaves these pads. Every direction is
+     * forced to input so recovery can never drive a control pin.
+     */
+    IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_00_GPIO1_IO16, 0U);
+    IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_03_GPIO1_IO19, 0U);
+    IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_04_GPIO1_IO20, 0U);
+    IOMUXC_SetPinMux(IOMUXC_GPIO_AD_B1_06_GPIO1_IO22, 0U);
+    IOMUXC_SetPinConfig(
+        IOMUXC_GPIO_AD_B1_00_GPIO1_IO16, NCR2_KNOB_PAD_CONFIG);
+    IOMUXC_SetPinConfig(
+        IOMUXC_GPIO_AD_B1_03_GPIO1_IO19, NCR2_KNOB_PAD_CONFIG);
+    IOMUXC_SetPinConfig(
+        IOMUXC_GPIO_AD_B1_04_GPIO1_IO20, NCR2_KNOB_PAD_CONFIG);
+    IOMUXC_SetPinConfig(
+        IOMUXC_GPIO_AD_B1_06_GPIO1_IO22, NCR2_KNOB_PAD_CONFIG);
+    GPIO1->GDIR &= ~(
+        (UINT32_C(1) << 16) |
+        (UINT32_C(1) << 19) |
+        (UINT32_C(1) << 20) |
+        (UINT32_C(1) << 22));
+}
+
+static uint8_t knob_adc_init(void)
+{
+    knob_pads_init();
+
+    /* 12-bit, asynchronous clock, 32-sample hardware averaging. */
+    ADC1->CFG =
+        ADC_CFG_ADICLK(3U) |
+        ADC_CFG_MODE(2U) |
+        ADC_CFG_AVGS(3U);
+    ADC1->GC =
+        ADC_GC_ADACKEN(1U) |
+        ADC_GC_AVGE(1U);
+    for (uint32_t index = UINT32_C(0);
+         index < ADC_HC_COUNT;
+         ++index) {
+        ADC1->HC[index] = ADC_HC_ADCH(NCR2_KNOB_DISABLED_CHANNEL);
+    }
+
+    ADC1->GS = ADC_GS_CALF_MASK;
+    ADC1->GC |= ADC_GC_CAL_MASK;
+    for (uint32_t timeout = UINT32_C(0);
+         timeout < NCR2_KNOB_ADC_TIMEOUT;
+         ++timeout) {
+        if ((ADC1->GC & ADC_GC_CAL_MASK) == UINT32_C(0)) {
+            const uint8_t valid =
+                ((ADC1->GS & ADC_GS_CALF_MASK) == UINT32_C(0) &&
+                 (ADC1->HS & ADC_HS_COCO0_MASK) != UINT32_C(0))
+                    ? UINT8_C(1)
+                    : UINT8_C(0);
+
+            /* Calibration leaves COCO0 set; clear it before the first read. */
+            (void)ADC1->R[0];
+            ADC1->HC[0] =
+                ADC_HC_ADCH(NCR2_KNOB_DISABLED_CHANNEL);
+            return valid;
+        }
+    }
+    return UINT8_C(0);
+}
+
+static uint8_t knob_adc_read(uint8_t channel, uint16_t *value)
+{
+    ADC1->HC[0] = ADC_HC_ADCH(channel);
+    for (uint32_t timeout = UINT32_C(0);
+         timeout < NCR2_KNOB_ADC_TIMEOUT;
+         ++timeout) {
+        if ((ADC1->HS & ADC_HS_COCO0_MASK) != UINT32_C(0)) {
+            *value = (uint16_t)(ADC1->R[0] & ADC_R_CDATA_MASK);
+            return UINT8_C(1);
+        }
+    }
+    ADC1->HC[0] = ADC_HC_ADCH(NCR2_KNOB_DISABLED_CHANNEL);
+    return UINT8_C(0);
+}
+
+/*
+ * Fill every field the host needs even when a conversion fails, so a failed
+ * capture is still a well-formed payload carrying valid == 0 rather than an
+ * error the host has to guess the meaning of.
+ */
+static uint8_t knob_capture(recovery_knob_sample_t *sample)
+{
+    uint16_t selector = UINT16_C(0);
+
+    for (uint32_t index = UINT32_C(0);
+         index < sizeof(*sample);
+         ++index) {
+        ((uint8_t *)sample)[index] = UINT8_C(0);
+    }
+    sample->magic = RECOVERY_KNOB_SAMPLE_MAGIC;
+    sample->burst = (uint8_t)NCR2_BOARD_KNOB_BURST;
+    sample->adc_bits = UINT8_C(12);
+    for (uint32_t index = UINT32_C(0);
+         index < NCR2_BOARD_KNOB_COUNT;
+         ++index) {
+        sample->channel[index] = g_knob_channel[index];
+    }
+
+    if (g_knob_adc_ready == UINT8_C(0)) {
+        g_knob_adc_ready = knob_adc_init();
+        if (g_knob_adc_ready == UINT8_C(0)) {
+            return UINT8_C(0);
+        }
+    }
+
+    /*
+     * The payload is packed for the wire, so its members cannot be handed
+     * out by address. Convert through an aligned local instead.
+     */
+    for (uint32_t index = UINT32_C(0);
+         index < NCR2_BOARD_KNOB_COUNT;
+         ++index) {
+        uint16_t knob = UINT16_C(0);
+
+        if (knob_adc_read(g_knob_channel[index], &knob) == UINT8_C(0)) {
+            return UINT8_C(0);
+        }
+        sample->value[index] = knob;
+    }
+
+    /*
+     * Burst the selector alone. The spread across a stationary detent is the
+     * measurement that sets a movement threshold no resting knob can trip.
+     */
+    sample->selector_min = UINT16_MAX;
+    sample->selector_max = UINT16_C(0);
+    for (uint32_t index = UINT32_C(0);
+         index < NCR2_BOARD_KNOB_BURST;
+         ++index) {
+        if (knob_adc_read(
+                g_knob_channel[NCR2_BOARD_KNOB_SELECTOR_INDEX],
+                &selector) == UINT8_C(0)) {
+            sample->selector_min = UINT16_C(0);
+            sample->selector_max = UINT16_C(0);
+            return UINT8_C(0);
+        }
+        if (selector < sample->selector_min) {
+            sample->selector_min = selector;
+        }
+        if (selector > sample->selector_max) {
+            sample->selector_max = selector;
+        }
+    }
+    sample->value[NCR2_BOARD_KNOB_SELECTOR_INDEX] = selector;
+    return UINT8_C(1);
+}
+
+int ncr2_board_recovery_read_knobs(
+    void *context,
+    void *destination,
+    uint32_t capacity)
+{
+    recovery_knob_sample_t sample;
+
+    (void)context;
+    if (destination == NULL ||
+        capacity < sizeof(sample)) {
+        return -1;
+    }
+
+    sample.valid = knob_capture(&sample);
+    sample.sample_index = ++g_knob_sample_index;
+    ADC1->HC[0] = ADC_HC_ADCH(NCR2_KNOB_DISABLED_CHANNEL);
+
+    for (uint32_t index = UINT32_C(0);
+         index < sizeof(sample);
+         ++index) {
+        ((uint8_t *)destination)[index] =
+            ((const uint8_t *)&sample)[index];
+    }
+    return (int)sizeof(sample);
 }

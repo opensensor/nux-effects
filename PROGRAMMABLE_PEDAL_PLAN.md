@@ -587,6 +587,14 @@ Gate:
 - preset power-loss tests retain the last valid generation;
 - host and firmware reject incompatible schemas cleanly.
 
+The host design and preview page has landed early, ahead of the device
+work in this phase, because it needs no hardware: `host/editor` composes
+programs from the compiled registry, accepts effects written against the
+ABI, and previews them by building and running `effect_runtime` and
+`program_runtime` on the host. It is documented in
+[docs/app/EFFECT_EDITOR.md](docs/app/EFFECT_EDITOR.md). MIDI, presets,
+persistence, and the update UI remain outstanding.
+
 ### Phase 8 — release hardening
 
 Work:

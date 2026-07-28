@@ -9,7 +9,7 @@
 static int command_is_valid(uint8_t command)
 {
     return command >= RECOVERY_COMMAND_GET_INFO &&
-           command <= RECOVERY_COMMAND_FINALIZE_FULL_FLASH;
+           command <= RECOVERY_COMMAND_READ_KNOBS;
 }
 
 int recovery_command_is_mutating(uint8_t command)

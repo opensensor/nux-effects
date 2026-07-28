@@ -349,7 +349,7 @@ class FactorySlotSourceTests(unittest.TestCase):
         # drive, so the relay hunt must not reuse the LED dwell times.
         self.assertIn("NCR2_INPUT_FLOOR", application)
 
-    def test_hardware_app_exposes_eight_bounded_effects(self):
+    def test_hardware_app_exposes_eight_bounded_artist_presets(self):
         application = (
             ROOT
             / "firmware"
@@ -359,27 +359,47 @@ class FactorySlotSourceTests(unittest.TestCase):
         ).read_text()
 
         for effect in (
-            "NCR2_EFFECT_OVERDRIVE",
-            "NCR2_EFFECT_FUZZ",
-            "NCR2_EFFECT_TREMOLO",
-            "NCR2_EFFECT_OCTAVE_FUZZ",
-            "NCR2_EFFECT_BIT_CRUSHER",
-            "NCR2_EFFECT_RING_MOD",
-            "NCR2_EFFECT_SLAPBACK",
-            "NCR2_EFFECT_ECHO",
+            "NCR2_EFFECT_SHINE_DRIVE",
+            "NCR2_EFFECT_WALL_FUZZ",
+            "NCR2_EFFECT_BREATHE_VIBE",
+            "NCR2_EFFECT_ECHOES_TAPE",
+            "NCR2_EFFECT_RAGE_DRIVE",
+            "NCR2_EFFECT_COCKED_WAH",
+            "NCR2_EFFECT_GUERRILLA_TREM",
+            "NCR2_EFFECT_WHAMMY_FUZZ",
         ):
             self.assertIn(effect, application)
         self.assertIn("NCR2_EFFECT_COUNT UINT32_C(8)", application)
         self.assertIn("quantize_selector(", application)
+        self.assertIn("NCR2_SELECTOR_SETTLE_SAMPLES", application)
         self.assertIn("NCR2_SELECTOR_HYSTERESIS", application)
+        self.assertIn("g_selector_candidate_samples", application)
+        self.assertIn("g_selector_detent", application)
+        # The equal-width bins this replaced merged two knob positions and
+        # left one effect unreachable; see tests/test_selector_detents.py.
+        self.assertNotIn(
+            "(sample * NCR2_EFFECT_COUNT) /",
+            application,
+        )
+        self.assertIn(
+            "const int32_t transitioned = blend_samples_q15(",
+            application,
+        )
+        self.assertNotIn(
+            "sample * (int64_t)g_selector_ramp",
+            application,
+        )
         self.assertIn('section(".sdram_bss")', application)
         self.assertIn("initialize_effect_processor()", application)
         self.assertIn(
             "NCR2_SAFE_OUTPUT_PEAK INT32_C(0x10000000)",
             application,
         )
-        self.assertIn("NCR2_OVERDRIVE_Q12_RANGE", application)
-        self.assertIn("NCR2_FUZZ_Q12_RANGE", application)
+        self.assertIn("NCR2_SHINE_DRIVE_Q12_RANGE", application)
+        self.assertIn("NCR2_WALL_FUZZ_Q12_RANGE", application)
+        self.assertIn("NCR2_RAGE_DRIVE_Q12_RANGE", application)
+        self.assertIn("NCR2_WHAMMY_WINDOW_FRAMES", application)
+        self.assertIn("phase_a + UINT32_C(0x80000000)", application)
 
     def test_source_audio_emulator_is_offline_only(self):
         source = (

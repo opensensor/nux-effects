@@ -265,6 +265,8 @@ static void enter_hardware_recovery(
 #else
     make_readonly_recovery(hardware);
 #endif
+    hardware->recovery.read_knobs =
+        ncr2_board_recovery_read_knobs;
 
     recovery_engine_init(
         &hardware->engine,

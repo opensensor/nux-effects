@@ -50,7 +50,8 @@ static int command_uses_session(uint8_t command)
     return command != RECOVERY_COMMAND_GET_INFO &&
            command != RECOVERY_COMMAND_BEGIN_IMAGE &&
            command != RECOVERY_COMMAND_BEGIN_FULL_FLASH &&
-           command != RECOVERY_COMMAND_GET_LOG;
+           command != RECOVERY_COMMAND_GET_LOG &&
+           command != RECOVERY_COMMAND_READ_KNOBS;
 }
 
 static int command_uses_payload(uint8_t command)
@@ -58,6 +59,17 @@ static int command_uses_payload(uint8_t command)
     return command == RECOVERY_COMMAND_WRITE_CHUNK ||
            command == RECOVERY_COMMAND_READ_CHUNK ||
            command == RECOVERY_COMMAND_BEGIN_FULL_FLASH;
+}
+
+/*
+ * The retry cache exists so a resent mutating command is not applied twice.
+ * A live measurement is the opposite: every identical READ_KNOBS must sample
+ * the converter again, or a host polling a stationary packet would be served
+ * the first reading forever and see a knob that never moves.
+ */
+static int command_is_cacheable(uint8_t command)
+{
+    return command != RECOVERY_COMMAND_READ_KNOBS;
 }
 
 static int command_is_full_only(uint8_t command)
@@ -305,6 +317,9 @@ static uint16_t handle_get_info(recovery_engine_t *engine,
             RECOVERY_CAPABILITY_FULL_FLASH_RAM |
             RECOVERY_CAPABILITY_PROGRESSIVE_FULL_ERASE;
     }
+    if (engine->backend.read_knobs != NULL) {
+        info.capabilities |= RECOVERY_CAPABILITY_KNOB_SAMPLE;
+    }
     info.max_chunk_size = RECOVERY_PAYLOAD_SIZE;
 
     response->length = (uint16_t)sizeof(info);
@@ -326,6 +341,31 @@ static uint16_t handle_get_log(recovery_engine_t *engine,
         RECOVERY_PAYLOAD_SIZE);
     if (length < 0 ||
         (uint32_t)length > RECOVERY_PAYLOAD_SIZE) {
+        return RECOVERY_STATUS_BACKEND_ERROR;
+    }
+    response->length = (uint16_t)length;
+    return RECOVERY_STATUS_OK;
+}
+
+static uint16_t handle_read_knobs(recovery_engine_t *engine,
+                                  recovery_packet_t *response)
+{
+    int length;
+
+    /*
+     * Absent rather than failed: a host that probes an older recovery build
+     * must be able to tell "this firmware cannot sample knobs" apart from
+     * "the converter is broken", so report the missing hook as an unknown
+     * command and keep RECOVERY_STATUS_BACKEND_ERROR meaning a real fault.
+     */
+    if (engine->backend.read_knobs == NULL) {
+        return RECOVERY_STATUS_BAD_COMMAND;
+    }
+    length = engine->backend.read_knobs(
+        engine->backend.context,
+        response->payload,
+        RECOVERY_PAYLOAD_SIZE);
+    if (length != (int)sizeof(recovery_knob_sample_t)) {
         return RECOVERY_STATUS_BACKEND_ERROR;
     }
     response->length = (uint16_t)length;
@@ -629,6 +669,8 @@ static uint16_t dispatch_command(recovery_engine_t *engine,
         return RECOVERY_STATUS_OK;
     case RECOVERY_COMMAND_GET_LOG:
         return handle_get_log(engine, response);
+    case RECOVERY_COMMAND_READ_KNOBS:
+        return handle_read_knobs(engine, response);
     case RECOVERY_COMMAND_BEGIN_FULL_FLASH:
         return handle_begin_full_flash(engine, request, response);
     case RECOVERY_COMMAND_ERASE_FULL_FLASH:
@@ -693,6 +735,7 @@ void recovery_engine_process(recovery_engine_t *engine,
     }
 
     if (engine->has_previous != UINT8_C(0) &&
+        command_is_cacheable(request->command) != 0 &&
         bytes_equal(
             request,
             &engine->previous_request,
@@ -748,8 +791,10 @@ void recovery_engine_process(recovery_engine_t *engine,
         if (session_command != 0) {
             ++engine->expected_sequence;
         }
-        engine->previous_request = *request;
-        engine->previous_response = *response;
-        engine->has_previous = UINT8_C(1);
+        if (command_is_cacheable(request->command) != 0) {
+            engine->previous_request = *request;
+            engine->previous_response = *response;
+            engine->has_previous = UINT8_C(1);
+        }
     }
 }

@@ -21,6 +21,9 @@ The independent open recovery wire format is documented in
 [docs/protocol/OPEN_RECOVERY_PROTOCOL.md](docs/protocol/OPEN_RECOVERY_PROTOCOL.md).
 The allocation-free application effect ABI and program model are documented
 in [docs/app/EFFECT_RUNTIME.md](docs/app/EFFECT_RUNTIME.md).
+The host page for designing programs, authoring effects in C, and previewing
+them through the firmware's own runtime is documented in
+[docs/app/EFFECT_EDITOR.md](docs/app/EFFECT_EDITOR.md).
 The copyright-neutral diagnostic path that chain-loads the preserved factory
 Metal engine is documented in
 [docs/hardware/FACTORY_BRIDGE.md](docs/hardware/FACTORY_BRIDGE.md).
@@ -32,12 +35,15 @@ The executed factory SAI/eDMA format and buffer topology are documented in
 The recovered GPIO startup levels and remaining analog-control ambiguity are
 documented in
 [docs/hardware/FACTORY_BOARD_CONTROL.md](docs/hardware/FACTORY_BOARD_CONTROL.md).
-Last-resort recovery through the immutable i.MX RT1051 ROM downloader is
-documented in
-[docs/hardware/ROM_SDP_RECOVERY.md](docs/hardware/ROM_SDP_RECOVERY.md).
+Recovery through the immutable i.MX RT1051 ROM downloader is documented in
+[docs/hardware/ROM_SDP_RECOVERY.md](docs/hardware/ROM_SDP_RECOVERY.md). It is
+both the last resort and, while the open NOR programmer stays fail-closed,
+the routine way to install a bootloader.
 The guarded SDRAM personality that can replace all 8 MiB through the open
 HID protocol is documented in
-[docs/hardware/RAM_FULL_FLASH_RECOVERY.md](docs/hardware/RAM_FULL_FLASH_RECOVERY.md).
+[docs/hardware/RAM_FULL_FLASH_RECOVERY.md](docs/hardware/RAM_FULL_FLASH_RECOVERY.md);
+its whole-chip write is currently refused before erase because of
+[docs/hardware/NOR_PROGRAM_FIFO_DEFECT.md](docs/hardware/NOR_PROGRAM_FIFO_DEFECT.md).
 The exact Linux `sdphost`, `blhost`, and RT1052 RAM flashloader assets used on
 physical NCR-2 hardware are preserved with a guarded host wrapper.
 
@@ -138,6 +144,19 @@ operates on runtime catalog sizes and has no four-effect assumption.
 The first source catalog contains six host-tested starter programs assembled
 from Gain and Soft Clip descriptors; it is test scaffolding pending audio
 hardware bring-up.
+
+A host design page under `host/editor/` now composes those descriptors into
+programs, accepts new effects written against the ABI, and previews them by
+compiling and running the application's own `effect_runtime` and
+`program_runtime` sources locally. It can also lift the hardware
+application's eight fixed-point panel presets out of
+`firmware/hardware_app/src/main.c` at build time and preview those, without
+modifying that file; the extraction fails loudly if the DSP region moves. It reports the runtime's real validation
+status codes, non-finite output, arena use, and host-relative block timing,
+and exports firmware-shaped C that CI compiles against the include tree. It
+holds no second DSP implementation, opens no USB device, and produces no
+flashable image; on-target CPU budget and audible hardware tests remain
+device-side gates.
 
 For first-image continuity, an opt-in 776-byte original-source bridge now
 validates and loads the preserved factory Metal engine from the compatibility

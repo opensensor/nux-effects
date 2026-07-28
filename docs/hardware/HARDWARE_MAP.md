@@ -41,7 +41,7 @@ tracing distinguishes the active audio path from unused shared SDK code:
 | second footswitch | unknown | unresolved | continuity/register observation |
 | Decay knob | ADC1 channel 5 (`GPIO_AD_B1_00`) | source-confirmed from executed Reverb ADC_ETC chain and parameter path | live range check |
 | Tweak knob | ADC1 channel 8 (`GPIO_AD_B1_03`) | source-confirmed from executed Reverb ADC_ETC chain and parameter path | live range check |
-| Type/step knob | ADC1 channel 9 (`GPIO_AD_B1_04`) | source-confirmed; stock code quantizes this channel into eight modes | live range check |
+| Type/step knob | ADC1 channel 9 (`GPIO_AD_B1_04`) | source-confirmed; stock code quantizes this channel into eight modes. Detent voltages **not yet measured** | `pedalctl calibrate-selector` |
 | Level knob | ADC1 channel 11 (`GPIO_AD_B1_06`) | source-confirmed from executed Reverb ADC_ETC chain and parameter path | live range check |
 | expression input | ADC channel/presence unknown | unresolved | schematic trace and ADC capture |
 | mode/status LEDs | GPIO/PWM unknown | unresolved | continuity and safe current-path trace |
@@ -85,29 +85,139 @@ them a conventional pedal mapping:
 | Type | eight-position effect selector |
 | Level | effect output level |
 
-The Type ADC range is divided into eight equal bins with 48 ADC counts of
-hysteresis around the active bin. From low to high ADC value, the algorithms
-are Overdrive, Fuzz, Tremolo, Octave Fuzz, Bit Crusher, Ring Mod, Slapback
-and Echo. A roughly 11 ms fade-out/fade-in surrounds algorithm changes.
-Overdrive reaches 32x internal gain and the two fuzz modes reach 96x, while
-all eight algorithms retain the same `+/-0x10000000` final sample ceiling as
-the physically validated lower-level drive build. The algorithms use Tweak
-as follows:
+### Type selector: measured 2026-07-27
+
+Measured on physical hardware over `RECOVERY_COMMAND_READ_KNOBS`, stepping
+every detent while polling ADC1 channel 9. Knob position 1 is the topmost
+printed label.
+
+| Knob position | ADC | gap to next |
+|---:|---:|---:|
+| 1 | 3581 | 510 |
+| 2 | 3071 | 511 |
+| 3 | 2560 | 511 |
+| 4 | 2049 | 511 |
+| 5 | 1538 | 510 |
+| 6 | 1028 | 512 |
+| 7 | 516 | 514 |
+| 8 | 2 | — |
+
+Two facts that no previous build accounted for:
+
+- **The ladder descends with position.** Position 1 is the *highest* voltage
+  and position 8 is very nearly zero, so effect order assigned by ascending
+  ADC runs backwards relative to the printed labels.
+- **It spans 2..3581, not 0..4095.** The eight detents are evenly spaced at
+  ~511 counts, but the top of the ladder stops roughly 500 counts short of
+  full scale.
+
+Resting noise is 1 to 5 counts across the whole sweep, so the shipped
+160-count latch radius is more than thirty times larger than anything the
+hardware actually produces.
+
+### Two defects the measurement proves
+
+Applying the shipped quantiser `effect = (adc * 8) / 4096` to the measured
+detents:
+
+| Knob position | ADC | bin | effect selected |
+|---:|---:|---:|---|
+| 1 | 3581 | 6 | Guerrilla Trem |
+| 2 | 3071 | 5 | Cocked Wah |
+| 3 | 2560 | 5 | Cocked Wah |
+| 4 | 2049 | 4 | Rage Drive |
+| 5 | 1538 | 3 | Echoes Tape |
+| 6 | 1028 | 2 | Breathe Vibe |
+| 7 | 516 | 1 | Wall Fuzz |
+| 8 | 2 | 0 | Shine Drive |
+
+1. **Positions 2 and 3 are the same effect.** Both land in bin 5, so one
+   detent of the eight is a duplicate and moving between them changes
+   nothing at all — which is indistinguishable from a broken selector.
+2. **Whammy Fuzz can never be selected.** Bin 7 requires an ADC value of at
+   least 3584 and the highest detent measures 3581, missing the last bin by
+   **three counts**.
+
+The 160-count latch radius, long suspected, is *not* implicated: every
+adjacent gap is about 511 counts, comfortably clear of it. That suspicion
+came from reasoning about an unmeasured ladder, and the measurement retired
+it.
+
+The correct algorithm is nearest-detent matching against this measured table
+rather than equal bins, which tolerates both the offset span and the
+descending order. Recalibrate with:
+
+```sh
+python3 tools/pedalctl.py calibrate-selector
+```
+
+Algorithm changes use a roughly 11 ms effect-to-clean-to-effect crossfade;
+selector noise therefore falls back to clean converter audio and can never
+mute the wet route.
+
+The artist-inspired build groups four spacious, sustaining psychedelic
+presets followed by four tight or experimental heavy presets. From low to
+high ADC value they are Shine Drive, Wall Fuzz, Breathe Vibe, Echoes Tape,
+Rage Drive, Cocked Wah, Guerrilla Trem and Whammy Fuzz. These names describe
+the intended playing response rather than copies of a proprietary circuit.
+All eight retain the same `+/-0x10000000` final sample ceiling as the
+physically validated lower-level drive build.
+
+The two physically preferred modulation slots, Breathe Vibe and Guerrilla
+Trem, remain unchanged. Shine Drive, Wall Fuzz, Rage Drive and Whammy Fuzz
+retain their high internal gain but use a parallel clean attack and a lower
+wet return so they no longer arrive roughly an order of magnitude louder
+than those reference slots. Cocked Wah receives compensating gain before
+its parallel clean blend.
 
 | Effect | Decay / Amount | Tweak / Character |
 |---|---|---|
-| Overdrive | gain, 1x to 32x | soft/dark to hard/bright |
-| Fuzz | gain, 2x to 96x | soft/dark to hard/bright |
-| Tremolo | combined rate and depth | rounded to chopped waveform |
-| Octave Fuzz | octave gain | soft/dark to hard/bright |
-| Bit Crusher | bit depth and sample hold | clean-to-crushed blend |
-| Ring Mod | carrier frequency | triangle-to-square carrier |
-| Slapback | 30 to 180 ms delay | wet level and regeneration |
-| Echo | 150 to approximately 683 ms delay | wet level and regeneration |
+| Shine Drive | gain, 1x to 24x | warm/soft to bright/firm |
+| Wall Fuzz | sustain gain, 4x to 96x | dark/rounded to open/firm |
+| Breathe Vibe | modulation rate, 0.35 to 5 Hz | shallow throb to deep swirl |
+| Echoes Tape | delay time, 120 to 625 ms | repeat level, feedback and tape age |
+| Rage Drive | gain, 2x to 40x | thick to tight/biting |
+| Cocked Wah | resonant center frequency | resonance and filter drive |
+| Guerrilla Trem | rate, 1 to 16 Hz | smooth half-depth pulse to hard chop |
+| Whammy Fuzz | dry-to-octave-up blend | clean pitch voice to driven fuzz |
 
-Delay feedback is bounded below unity and the 128 KiB delay line occupies
-the linker-reserved, non-loadable SDRAM audio-buffer region. The application
-clears that region before making the effect route available.
+### Measured branch levels
+
+Measured 2026-07-27 by rendering every branch through the native preview
+harness (`host/editor/hardware_app.py`) with a decaying three-note chord, at
+both a soft and a hard pick. Figures are rms relative to the same branch's own
+dry input:
+
+| Preset | soft pick | hard pick |
+|---|---:|---:|
+| Shine Drive | +3.8 dB | +0.4 dB |
+| Wall Fuzz | +8.7 dB | +1.9 dB |
+| Breathe Vibe | −3.9 dB | −3.9 dB |
+| Echoes Tape | −2.5 dB | −2.5 dB |
+| Rage Drive | +6.4 dB | +1.5 dB |
+| Cocked Wah | −0.2 dB | −0.4 dB |
+| Guerrilla Trem | −3.3 dB | −3.3 dB |
+| Whammy Fuzz | +4.3 dB | +1.5 dB |
+
+**All eight branches produce continuous audio inside a roughly 12 dB window,
+and none collapses.** This matters for interpreting the field report that
+most Type positions sounded dead or faint: the two positions reported as good
+(Breathe Vibe and Guerrilla Trem) are in fact the two *quietest* branches, so
+loudness does not explain which positions were liked.
+
+The harness sets the effect index directly and never runs the selector, so
+these figures isolate the DSP from the control path. The DSP is healthy;
+anything the player hears as a dead position therefore originates in the
+selector, not in the algorithms. Reading the dry-blend coefficient of a branch
+alone is misleading here — Shine Drive, Wall Fuzz and Rage Drive each pass
+only about 0.4x dry, but their wet return makes up the difference.
+
+The Whammy voice uses two delay-line read heads 180 degrees apart with
+crossfaded windows. It avoids the full-wave rectifier responsible for the
+old octave fuzz's harsh upper-register breakup. Tape feedback is bounded
+below unity and its dual taps are progressively filtered. The 128 KiB delay
+line occupies the linker-reserved, non-loadable SDRAM audio-buffer region,
+which the application clears before making the effect route available.
 
 The exact register, pin, clock, and TCD values are in
 [FACTORY_AUDIO.md](FACTORY_AUDIO.md).

@@ -203,6 +203,7 @@ int main(void)
     backend.erase = mock_erase;
     backend.program = mock_program;
     backend.get_log = NULL;
+    backend.read_knobs = NULL;
     backend.store_boot_state = mock_store_state;
     backend.request_reboot = mock_reboot;
     recovery_engine_init(&engine, &backend, &state, BOOT_SLOT_A, 0x1234);

@@ -56,6 +56,7 @@ The CRC is the reflected IEEE CRC-32 used by zlib.
 | 10 | `BEGIN_FULL_FLASH` | yes |
 | 11 | `ERASE_FULL_FLASH` | yes |
 | 12 | `FINALIZE_FULL_FLASH` | yes |
+| 13 | `READ_KNOBS` | no |
 
 `BEGIN_IMAGE` establishes a fresh nonzero session nonce and resets sequence
 handling. In protocol version 2 its `offset` field declares the exact
@@ -77,6 +78,53 @@ prevents holes. Both write and read ranges must remain inside the byte count
 declared by `BEGIN_IMAGE`. `READ_CHUNK` uses `length` as the requested read
 size and sends that many zero payload bytes so both request CRCs remain
 unambiguous.
+
+### `READ_KNOBS`
+
+Samples the four front-panel controls on ADC1 and returns one 32-byte
+payload. It touches no flash and opens no session, so it uses zero flags,
+zero session, and zero sequence exactly like `GET_INFO` and `GET_LOG`. It is
+available in both the XIP bootloader and the RAM personality, including
+inside a whole-flash session whose erase has already run.
+
+The command exists because the stepped Type control's detent voltages have
+never been measured. Firmware that quantises that channel into equal bins is
+guessing, and a detent that lands near an assumed boundary — or two detents
+that fall in one bin — silently refuses to change program.
+
+| Offset | Size | Field |
+|---:|---:|---|
+| `0x00` | 4 | magic `KNOB` (`0x424f4e4b`) |
+| `0x04` | 8 | `uint16` values: Amount, Character, Type, Level |
+| `0x0c` | 2 | minimum Type reading across the burst |
+| `0x0e` | 2 | maximum Type reading across the burst |
+| `0x10` | 4 | ADC1 channel numbers, matching the value order |
+| `0x14` | 1 | burst length used for the Type channel |
+| `0x15` | 1 | `1` when every conversion succeeded |
+| `0x16` | 1 | ADC resolution in bits |
+| `0x17` | 1 | reserved |
+| `0x18` | 4 | capture counter, incremented per command |
+| `0x1c` | 4 | reserved |
+
+The min/max pair bounds the electrical noise at a resting detent, which is
+the number a movement threshold must clear so a stationary knob can never
+trip it. The capture counter lets a host reject a stale HID input report left
+in the queue by an earlier exchange.
+
+The converter is left disabled until the first `READ_KNOBS`, so a recovery
+session that never asks behaves exactly as it did before the command existed.
+A failed conversion still returns a well-formed payload with `valid == 0`
+rather than an error status the host has to interpret.
+
+`READ_KNOBS` is deliberately exempt from the retry cache. That cache exists so
+a resent mutating command is not applied twice; a live measurement is the
+opposite, and every identical request must sample the converter again. A host
+polling a stationary knob sends byte-identical packets, and a cached reply
+would freeze the reading at the first capture.
+
+Firmware that cannot sample the panel leaves capability bit `0x100` clear and
+answers `BAD_COMMAND`, which is also what any build predating the command
+returns. `BACKEND_ERROR` therefore always means a real converter fault.
 
 `ERASE_SLOT` rounds the declared byte count up to the W25Q64's 4 KiB erase
 unit and erases exactly that prefix of the inactive slot. A 5.8 KiB bridge
@@ -223,6 +271,36 @@ python3 tools/pedalctl.py inspect-slot \
   build/open/ncr2-app-0.1.0.slot
 ```
 
+Read the front panel without touching flash, and measure the stepped Type
+ladder one detent at a time:
+
+```sh
+python3 tools/pedalctl.py knobs --watch
+python3 tools/pedalctl.py calibrate-selector
+```
+
+Hand control to the immutable NXP ROM so a new bootloader can be installed
+while the open NOR programmer remains unsafe:
+
+```sh
+python3 tools/pedalctl.py handoff-to-rom IMAGE \
+  --expected-sha256 SHA256 --confirm ERASE-BOOT-REGION
+```
+
+This validates the follow-up image before mutating anything, then erases
+exactly the first 64 KiB — the boot header the ROM checks — and stops. Erase
+is the one part of this backend that is physically trustworthy, so the
+bounded erase is safe even though `WRITE_CHUNK` is not. Everything above the
+header, including both slots and the factory compatibility region, is
+untouched. See [ROM_SDP_RECOVERY.md](../hardware/ROM_SDP_RECOVERY.md) for the
+cold start and flash that follow.
+
+`calibrate-selector` prompts through all eight positions, reports the
+adjacent gaps against the worst resting noise it saw, warns when two detents
+are indistinguishable, and prints a ready-to-paste firmware table. Both
+commands refuse to run against firmware that does not advertise capability
+bit `0x100`.
+
 The `info` and `upload` commands are implemented against `hidraw`, including
 exact retries, sequence checking, inactive-slot selection, finalization, and
 pending activation. The host and bootloader must use the same protocol
@@ -234,17 +312,35 @@ recovery gesture, a complete image can be restored with:
 
 ```sh
 python3 tools/pedalctl.py restore-full \
-  --device /dev/hidrawN \
-  --allow-borrowed-nux-id \
   --confirm WIPE-ALL-8MIB \
   --expected-sha256 <64-hex-digit-sha256> \
   artifacts/private/full-image.bin
 ```
 
+When exactly one `9527:c157` recovery interface is present, the host finds
+its current `/dev/hidrawN` node automatically. Supplying `--device` remains
+available for multi-device setups. Auto-discovery does not weaken protocol
+identification: `GET_INFO` must decode as version 2 and advertise RAM
+full-flash, progressive-erase, and physically verified full-program
+capabilities before the first mutating command is sent. An original NUX
+updater cannot pass that gate.
+
 The input must be exactly 8 MiB and contain plausible `FCFB` and IVT headers.
 The full-restore command retains a conservative ten-minute per-command
 timeout, but progressive erase keeps every individual request bounded to one
-64 KiB range and prints aggregate progress every 512 KiB.
+64 KiB range and prints aggregate progress every 512 KiB. In principle, the
+single command begins the guarded transaction, progressively erases all NOR,
+writes all 8 MiB with immediate device-side verification, asks RAM recovery
+to hash the complete stored image, and reboots only after that digest
+matches.
+
+Current recovery firmware intentionally does not advertise
+`RECOVERY_CAPABILITY_VERIFIED_FULL_PROGRAM`: physical testing found corrupt
+writes with 32-, 8-, and 4-byte payloads. Consequently `restore-full` refuses
+before `BEGIN_FULL_FLASH` or any erase. The capability may only be advertised
+after a replacement NOR programming backend passes a complete physical
+write/readback test. Until then, use `tools/ncr2_rom_recover.py` and the NXP
+ROM flashloader for whole-chip recovery.
 
 ## Status values
 

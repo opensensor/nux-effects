@@ -1,3 +1,4 @@
+import dataclasses
 import importlib.util
 import struct
 import sys
@@ -49,6 +50,86 @@ class PacketTests(unittest.TestCase):
                 command=pedalctl.COMMANDS["write-chunk"],
                 payload=bytes(33),
             ).encode()
+
+
+class RecoveryDeviceDiscoveryTests(unittest.TestCase):
+    @staticmethod
+    def add_hidraw(
+        sysfs_root: Path,
+        name: str,
+        hid_id: str,
+    ) -> None:
+        device = sysfs_root / name / "device"
+        device.mkdir(parents=True)
+        (device / "uevent").write_text(
+            f"DRIVER=hid-generic\nHID_ID={hid_id}\n"
+        )
+
+    def test_discovers_single_open_recovery_node(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sysfs_root = root / "sys"
+            device_root = root / "dev"
+            sysfs_root.mkdir()
+            device_root.mkdir()
+            self.add_hidraw(
+                sysfs_root,
+                "hidraw3",
+                "0003:00009527:0000C157",
+            )
+            self.add_hidraw(
+                sysfs_root,
+                "hidraw4",
+                "0003:00003142:0000A010",
+            )
+
+            self.assertEqual(
+                pedalctl.discover_recovery_device(
+                    sysfs_root,
+                    device_root,
+                ),
+                device_root / "hidraw3",
+            )
+
+    def test_discovery_rejects_zero_or_multiple_nodes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sysfs_root = root / "sys"
+            device_root = root / "dev"
+            sysfs_root.mkdir()
+            device_root.mkdir()
+            with self.assertRaises(pedalctl.RecoveryError):
+                pedalctl.discover_recovery_device(
+                    sysfs_root,
+                    device_root,
+                )
+
+            self.add_hidraw(
+                sysfs_root,
+                "hidraw6",
+                "0003:00009527:0000C157",
+            )
+            self.add_hidraw(
+                sysfs_root,
+                "hidraw7",
+                "0003:00009527:0000C157",
+            )
+            with self.assertRaises(pedalctl.RecoveryError):
+                pedalctl.discover_recovery_device(
+                    sysfs_root,
+                    device_root,
+                )
+
+    def test_restore_full_device_argument_is_optional(self):
+        arguments = pedalctl.build_parser().parse_args(
+            [
+                "restore-full",
+                "full-image.bin",
+                "--confirm",
+                pedalctl.FULL_FLASH_CONFIRMATION,
+            ]
+        )
+        self.assertIsNone(arguments.device)
 
 
 class SlotImageTests(unittest.TestCase):
@@ -167,6 +248,39 @@ class FakeTransport:
 
 
 class ClientTests(unittest.TestCase):
+    def test_full_restore_requires_physically_verified_programming(self):
+        info = pedalctl.RecoveryInfo(
+            flash_size=0x800000,
+            slot_size=0x200000,
+            slot_a_offset=0x400000,
+            slot_b_offset=0x600000,
+            manifest_size=0x1000,
+            confirmed_slot=0,
+            pending_slot=0xFF,
+            selected_slot=0,
+            update_phase=0,
+            capabilities=(
+                pedalctl.CAPABILITY_FULL_FLASH_RAM |
+                pedalctl.CAPABILITY_PROGRESSIVE_FULL_ERASE
+            ),
+            max_chunk_size=32,
+        )
+
+        with self.assertRaisesRegex(
+            pedalctl.RecoveryError,
+            "not physically verified",
+        ):
+            pedalctl.validate_full_restore_target(info, 0x800000)
+
+        proven = dataclasses.replace(
+            info,
+            capabilities=(
+                info.capabilities |
+                pedalctl.CAPABILITY_VERIFIED_FULL_PROGRAM
+            ),
+        )
+        pedalctl.validate_full_restore_target(proven, 0x800000)
+
     def test_client_sequences_an_update(self):
         transport = FakeTransport()
         client = pedalctl.RecoveryClient(transport)
@@ -230,6 +344,178 @@ class ClientTests(unittest.TestCase):
                 for request in transport.requests
             )
         )
+
+        write_requests = [
+            request
+            for request in transport.requests
+            if request.command == pedalctl.COMMANDS["write-chunk"]
+        ]
+        self.assertEqual(
+            [request.offset for request in write_requests],
+            [0, 32],
+        )
+
+    def test_client_rejects_invalid_write_window(self):
+        client = pedalctl.RecoveryClient(FakeTransport())
+
+        with self.assertRaises(pedalctl.RecoveryError):
+            client.write(b"data", chunk_size=0)
+        with self.assertRaises(pedalctl.RecoveryError):
+            client.write(b"data", start_offset=5)
+
+
+class BoundedEraseTests(unittest.TestCase):
+    def erase_offsets(self, **kwargs):
+        transport = FakeTransport()
+        client = pedalctl.RecoveryClient(transport)
+        client.begin_full_flash(0x800000, b"\x00" * 32)
+        client.erase_full_flash(**kwargs)
+        return [
+            request.offset
+            for request in transport.requests
+            if request.command == pedalctl.COMMANDS["erase-full-flash"]
+        ]
+
+    def test_boot_region_handoff_erases_one_chunk_only(self):
+        offsets = self.erase_offsets(limit=pedalctl.BOOT_REGION_SIZE)
+        self.assertEqual(offsets, [0])
+
+    def test_unbounded_erase_still_covers_the_whole_chip(self):
+        offsets = self.erase_offsets()
+        self.assertEqual(len(offsets), 128)
+        self.assertEqual(offsets[0], 0)
+        self.assertEqual(offsets[-1], 0x800000 - 0x10000)
+
+    def test_limit_must_be_a_whole_erase_chunk_inside_the_chip(self):
+        for limit in (0, 0x8000, 0x900000, -0x10000):
+            with self.assertRaises(pedalctl.RecoveryError):
+                self.erase_offsets(limit=limit)
+
+
+class KnobTransport:
+    """Serves READ_KNOBS captures from a scripted list of selector values."""
+
+    def __init__(self, selectors, capabilities=pedalctl.CAPABILITY_KNOB_SAMPLE):
+        self.selectors = list(selectors)
+        self.capabilities = capabilities
+        self.sample_index = 0
+
+    def exchange(self, report: bytes) -> bytes:
+        request = pedalctl.Packet.decode(report)
+        if request.command == pedalctl.COMMANDS["get-info"]:
+            payload = pedalctl.INFO_STRUCT.pack(
+                0x800000,
+                0x200000,
+                0x400000,
+                0x600000,
+                0x1000,
+                0,
+                0xFF,
+                0,
+                0,
+                self.capabilities,
+                32,
+            )
+            return pedalctl.Packet(
+                command=request.command, payload=payload
+            ).encode()
+        if request.command != pedalctl.COMMANDS["read-knobs"]:
+            raise AssertionError(f"unexpected command {request.command}")
+        self.sample_index += 1
+        selector = self.selectors[
+            min(self.sample_index - 1, len(self.selectors) - 1)
+        ]
+        payload = pedalctl.KNOB_SAMPLE_STRUCT.pack(
+            pedalctl.KNOB_SAMPLE_MAGIC,
+            100,
+            200,
+            selector,
+            300,
+            selector - 3,
+            selector + 3,
+            5,
+            8,
+            9,
+            11,
+            16,
+            1,
+            12,
+            0,
+            self.sample_index,
+            0,
+        )
+        return pedalctl.Packet(
+            command=request.command, payload=payload
+        ).encode()
+
+
+class KnobSampleTests(unittest.TestCase):
+    def test_decodes_a_capture(self):
+        transport = KnobTransport([2103])
+        sample = pedalctl.RecoveryClient(transport).read_knobs()
+        self.assertEqual(sample.selector, 2103)
+        self.assertEqual(sample.values[0], 100)
+        self.assertEqual(sample.channels, (5, 8, 9, 11))
+        self.assertEqual(sample.selector_spread, 6)
+        self.assertEqual(sample.sample_index, 1)
+        self.assertTrue(sample.valid)
+
+    def test_rejects_a_foreign_payload(self):
+        payload = pedalctl.KNOB_SAMPLE_STRUCT.pack(
+            0xDEADBEEF, *([0] * 4), 0, 0, *([0] * 4), 0, 0, 0, 0, 0, 0
+        )
+        with self.assertRaises(pedalctl.RecoveryError):
+            pedalctl.KnobSample.decode(payload)
+        with self.assertRaises(pedalctl.RecoveryError):
+            pedalctl.KnobSample.decode(payload[:16])
+
+    def test_each_read_is_a_fresh_capture(self):
+        transport = KnobTransport([2103, 2110, 2820])
+        client = pedalctl.RecoveryClient(transport)
+        indices = [client.read_knobs().sample_index for _ in range(3)]
+        self.assertEqual(indices, [1, 2, 3])
+
+    def test_capability_guard_rejects_older_firmware(self):
+        client = pedalctl.RecoveryClient(KnobTransport([0], capabilities=0xF))
+        with self.assertRaises(pedalctl.RecoveryError):
+            pedalctl.require_knob_capability(client)
+
+    def test_capture_detent_reports_median_and_envelope(self):
+        transport = KnobTransport([2100, 2104, 2102])
+        client = pedalctl.RecoveryClient(transport)
+        value, low, high = pedalctl.capture_detent(client, 3)
+        self.assertEqual(value, 2102)
+        self.assertEqual(low, 2097)
+        self.assertEqual(high, 2107)
+
+
+class SelectorCalibrationTests(unittest.TestCase):
+    def test_clean_ladder_has_no_warnings(self):
+        detents = [40, 620, 1200, 1780, 2360, 2940, 3520, 4090]
+        report = pedalctl.selector_calibration_report(detents, [6] * 8)
+        self.assertEqual(report["minimum_gap"], 570)
+        self.assertEqual(report["warnings"], [])
+
+    def test_duplicate_detents_are_flagged(self):
+        detents = [40, 620, 620, 1780, 2360, 2940, 3520, 4090]
+        report = pedalctl.selector_calibration_report(detents, [6] * 8)
+        self.assertIn("duplicate-detents", report["warnings"])
+
+    def test_gap_swamped_by_noise_is_flagged(self):
+        detents = [40, 60, 1200, 1780, 2360, 2940, 3520, 4090]
+        report = pedalctl.selector_calibration_report(detents, [40] * 8)
+        self.assertIn("gap-not-clear-of-noise", report["warnings"])
+
+    def test_every_warning_has_operator_text(self):
+        for key in ("duplicate-detents", "non-monotonic",
+                    "gap-not-clear-of-noise"):
+            self.assertIn(key, pedalctl.CALIBRATION_WARNINGS)
+
+    def test_rendered_table_is_valid_c(self):
+        table = pedalctl.render_selector_table([40, 620, 1200])
+        self.assertIn("NCR2_EFFECT_COUNT", table)
+        self.assertIn("UINT16_C(620)", table)
+        self.assertTrue(table.rstrip().endswith("};"))
 
 
 if __name__ == "__main__":

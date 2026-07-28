@@ -13,7 +13,23 @@
 #define RECOVERY_CAPABILITY_BOUNDED_ERASE UINT32_C(0x00000010)
 #define RECOVERY_CAPABILITY_FULL_FLASH_RAM UINT32_C(0x00000020)
 #define RECOVERY_CAPABILITY_PROGRESSIVE_FULL_ERASE UINT32_C(0x00000040)
+/*
+ * Reserved until the NOR page-program backend passes physical full-image
+ * write and readback validation. The current firmware intentionally does not
+ * advertise this bit, so hosts fail closed before a destructive erase.
+ */
+#define RECOVERY_CAPABILITY_VERIFIED_FULL_PROGRAM UINT32_C(0x00000080)
+/*
+ * Set only when the backend can sample the four front-panel controls. The
+ * Type control is a stepped ladder whose detent voltages have never been
+ * measured, so the host needs a non-mutating way to read them before any
+ * firmware can quantise the channel correctly.
+ */
+#define RECOVERY_CAPABILITY_KNOB_SAMPLE UINT32_C(0x00000100)
 #define RECOVERY_FULL_FLASH_ERASE_CHUNK_SIZE UINT32_C(0x00010000)
+
+#define RECOVERY_KNOB_SAMPLE_MAGIC UINT32_C(0x424F4E4B)
+#define RECOVERY_KNOB_COUNT 4U
 
 enum recovery_update_phase {
     RECOVERY_PHASE_IDLE = 0,
@@ -38,6 +54,9 @@ typedef struct recovery_backend {
     int (*get_log)(void *context,
                    void *destination,
                    uint32_t capacity);
+    int (*read_knobs)(void *context,
+                      void *destination,
+                      uint32_t capacity);
     int (*store_boot_state)(void *context, const boot_state_t *state);
     void (*request_reboot)(void *context);
 } recovery_backend_t;
@@ -55,6 +74,30 @@ typedef struct __attribute__((packed)) recovery_info {
     uint32_t capabilities;
     uint32_t max_chunk_size;
 } recovery_info_t;
+
+/*
+ * One non-mutating front-panel capture. The selector burst min/max bound the
+ * electrical noise at a resting detent, which is exactly the number needed to
+ * choose a movement threshold that cannot be tripped by a stationary knob.
+ * sample_index increments per capture so a host can tell a fresh reading from
+ * a stale HID input report left in the queue by a previous exchange.
+ */
+typedef struct __attribute__((packed)) recovery_knob_sample {
+    uint32_t magic;
+    uint16_t value[RECOVERY_KNOB_COUNT];
+    uint16_t selector_min;
+    uint16_t selector_max;
+    uint8_t channel[RECOVERY_KNOB_COUNT];
+    uint8_t burst;
+    uint8_t valid;
+    uint8_t adc_bits;
+    uint8_t reserved;
+    uint32_t sample_index;
+    uint32_t reserved2;
+} recovery_knob_sample_t;
+
+_Static_assert(sizeof(recovery_knob_sample_t) == RECOVERY_PAYLOAD_SIZE,
+               "knob sample must fill one payload");
 
 typedef struct recovery_engine {
     recovery_backend_t backend;

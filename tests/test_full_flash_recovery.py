@@ -158,6 +158,7 @@ int main(void)
     backend.erase = mock_erase;
     backend.program = mock_program;
     backend.get_log = NULL;
+    backend.read_knobs = NULL;
     backend.store_boot_state = mock_store;
     backend.request_reboot = mock_reboot;
     boot_state_default(&state);
@@ -198,6 +199,10 @@ int main(void)
     if ((info.capabilities &
          RECOVERY_CAPABILITY_PROGRESSIVE_FULL_ERASE) == 0) {
         return 15;
+    }
+    if ((info.capabilities &
+         RECOVERY_CAPABILITY_VERIFIED_FULL_PROGRAM) != 0) {
+        return 16;
     }
 
     request(
