@@ -8,7 +8,8 @@ python3 host/editor/server.py --open
 ```
 
 Requires a host C compiler (`cc`) and nothing else — no packages, no
-network access, no device.
+network access, or device for previewing. Web DFU additionally requires a
+WebHID-capable Chromium browser and a pedal already running Open Recover.
 
 ## What it does
 
@@ -17,33 +18,41 @@ network access, no device.
 - **Program** — order effects into a chain and set parameters. Controls
   are bounded by the descriptor, so the page cannot ask for a value the
   firmware would reject.
+- **Engine bank** — compose four open engine slots (pedal positions 5–8),
+  each with eight independently previewable effect programs, and export a
+  versioned bank definition as JSON.
 - **Preview** — plays the chain's output through the *actual* firmware
   runtime compiled on this machine. Test signals include plucked notes,
   an open chord, sine, sweep, noise, an impulse, a file, or the
   microphone. `Space` plays; `B` swaps between dry and processed.
 - **Effect source** — a compilable ABI template to start from, compiler
   diagnostics with file and line, and a real-time rule scan.
-- **Hardware app presets** — an opt-in toggle that lifts the eight
-  fixed-point panel presets (Shine Drive, Wall Fuzz, Breathe Vibe,
-  Echoes Tape, Rage Drive, Cocked Wah, Guerrilla Trem, Whammy Fuzz) out
-  of `firmware/hardware_app/src/main.c` and previews them with Amount,
+- **Hardware app presets** — an opt-in toggle that lifts all 32 fixed-point
+  presets across Open Amp Studio, Drive + Dynamics, Motion + Pitch, and
+  Echo + Space out of `firmware/hardware_app/src/main.c` and previews them
+  with Amount,
   Character, and Level as the raw ADC counts the firmware reads. That
   file is never modified. Previews are pinned to 48 kHz, one preset per
   chain, and cannot be exported — on the device they are a `switch`, not
   registry effects.
 - **Export** — `effects_<name>.c`, its header, and a
   `programs_builtin.c`-style program block, ready to review and commit.
+- **Web DFU** — connect a known Open Recover device through WebHID and
+  install a reviewed `.slot` artifact to the inactive A/B application slot.
 
 The charts show input and output waveforms in separate lanes, their
 spectra, and the chain's response to a −1 → +1 ramp. The measurements
 table reports the runtime's own validation status codes, non-finite
 samples, peak and RMS, arena use, and host-relative block timing.
 
-## What it does not do
+## Current boundary
 
-It does not re-implement any DSP in JavaScript, talk to a pedal, write
-to the repository, or build a flashable image. Host block timing is not
-the on-target CPU budget gate.
+It does not re-implement DSP in JavaScript, write to the repository, or yet
+compile the exported 4×8 bank into a target artifact. That build step still
+produces a reviewed `.slot` outside the browser; Web DFU installs that whole
+application because the recovery protocol deliberately exposes no arbitrary
+factory or engine-region writes. Host block timing is not the on-target CPU
+budget gate.
 
 ## Layout
 
@@ -70,3 +79,8 @@ The server compiles and runs C that the page submits. Keep it on
 loopback (it refuses other addresses), run it on a machine you trust,
 and review authored sources as you would any code you are about to
 execute.
+
+Web DFU also checks the Open Recover product string, requires explicit
+acknowledgement because development builds temporarily borrow NUX's USB ID,
+chooses only the slot opposite the confirmed application, validates the slot
+manifest and payload SHA-256, and implements no full-flash commands.

@@ -69,7 +69,8 @@ they render identical samples for the same settings.
 
 ## Previewing the hardware application's presets
 
-`firmware/hardware_app/src/main.c` implements its eight panel presets as
+`firmware/hardware_app/src/main.c` implements 32 panel presets, arranged as
+four open engines of eight effects, as
 per-sample fixed-point code with file-scope state. They are not
 `effect_descriptor_t` effects, and that file cannot be compiled on the
 host at all: it also initializes SAI, eDMA, GPIO, and the watchdog
@@ -81,10 +82,10 @@ exactly that region out of the file at build time — the `NCR2_*`
 constants, the preset enumeration, the parameter struct, the DSP state
 the extracted functions actually use, and the chain from
 `capture_frame` through `ncr2_factory_audio_process_block` — and wraps
-each preset in an ABI adapter. Shine Drive, Wall Fuzz, Breathe Vibe,
-Echoes Tape, Rage Drive, Cocked Wah, Guerrilla Trem, and Whammy Fuzz
-then appear in the registry with Amount, Character, and Level exposed as
-the raw 0–4095 ADC counts the firmware reads.
+each preset in an ABI adapter. The registry therefore contains the exact
+Open Amp Studio, Drive + Dynamics, Motion + Pitch, and Echo + Space defaults,
+with Amount, Character, and Level exposed as the raw 0–4095 ADC counts the
+firmware reads.
 
 `main.c` is never modified. The extraction is strict and fails rather
 than drifting: a renamed DSP function or a missing preset raises, and
@@ -138,8 +139,15 @@ feature, and it is also the risk:
 - it rejects cross-origin requests and mismatched `Host` headers;
 - previews run with CPU, address-space, and file-size limits and a wall
   clock timeout; and
-- it never opens a USB device, writes to the repository, or produces a
-  flashable image.
+- the preview server never opens a USB device, writes to the repository, or
+  silently produces a flashable image.
+
+The separate WebHID updater is intentionally narrower than the host recovery
+tool. It accepts only manifest-bearing open `.slot` images, writes only the
+inactive A/B application slot, and has no full-flash command implementation.
+It checks the Open Recover product name, requires acknowledgement of the
+borrowed development USB identity, and relies on the bootloader to verify the
+complete stored image again before making it pending.
 
 Run it on a machine you trust, and treat authored effect sources the way
 you would treat any code you are about to execute.

@@ -27,8 +27,9 @@ Implemented:
 - a fixed, one-shot software-recovery mailbox in retained SRC GPR8/GPR9,
   plus an application-facing arm API;
 - a one-word, one-shot factory-engine mailbox in retained SRC GPR10, with a
-  two-second runtime footswitch gesture and four launch descriptors that pin
-  stock main-loop/LED-updater hooks and zero-filled monitor caves;
+  unified eight-position/two-second selection gesture and four launch
+  descriptors that pin stock main-loop/LED-updater hooks and zero-filled
+  monitor caves;
 - a replay- and torn-write-safe pending-trial mailbox in SRC GPR3–GPR6,
   binding application health confirmation to one slot and journal sequence;
 - a host-tested handoff service that starts an injected trial watchdog and
@@ -57,8 +58,8 @@ Implemented:
 - stable program and bank descriptors with catalog validation, transactional
   inactive-chain preparation, and count-independent navigation;
 - host-tested descriptor-driven Gain and Soft Clip reference effects;
-- a RAM-only program selector whose configurable default gesture is a
-  five-second hold and which operates on any runtime catalog size;
+- a reusable RAM-only program selector with configurable hold duration that
+  operates on any runtime catalog size;
 - a tested adapter from that NOR policy to the recovery engine and
   power-loss-safe boot journal;
 - a guarded full-chip packer that starts from the verified factory dump;
@@ -68,8 +69,9 @@ Implemented:
   handoff without embedding factory bytes.
 - a dynamic source launcher that reuses the compatibility preparation for
   Delay, Reverb, Modulation, or Metal, applies a transient main-loop
-  knob-select/return monitor to the ITCM copy, and never modifies the
-  preserved factory NOR;
+  knob-select/return monitor to the ITCM copy, maps positions 5–8 back to four
+  open slots without a second hold duration, and never modifies the preserved
+  factory NOR;
 - an opt-in source application linked to the recovered factory ITCM slot ABI,
   with a strict post-link checker and paired OEM-DFU/Metal-restore packer;
 - an opt-in factory-compatible SAI1/eDMA passthrough with DTCM ping-pong

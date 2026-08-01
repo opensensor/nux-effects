@@ -228,6 +228,51 @@ class ServerHelperTests(unittest.TestCase):
         self.assertEqual(program.nodes[0].parameters, ((1, 4.0),))
 
 
+class BrowserBankAndDfuTests(unittest.TestCase):
+    def test_page_exposes_four_open_engines_and_bounded_dfu(self):
+        page = (EDITOR / "static" / "index.html").read_text()
+        script = (EDITOR / "static" / "editor.js").read_text()
+        dfu = (EDITOR / "static" / "open_recovery_dfu.mjs").read_text()
+
+        self.assertEqual(page.count("data-open-engine="), 4)
+        self.assertIn('id="effect-positions"', page)
+        self.assertIn('id="dfu-connect"', page)
+        self.assertIn('id="dfu-install"', page)
+        self.assertIn("OPEN_ENGINE_LAYOUT", script)
+        self.assertIn('schema: "ncr2-open-engine-bank"', script)
+        self.assertIn("BEGIN_IMAGE: 2", dfu)
+        self.assertIn("ERASE_SLOT: 3", dfu)
+        self.assertIn("SET_PENDING: 7", dfu)
+        self.assertNotIn("BEGIN_FULL_FLASH", dfu)
+        self.assertNotIn("ERASE_FULL_FLASH", dfu)
+
+    @unittest.skipIf(
+        shutil.which("node") is None,
+        "Node.js is unavailable for the browser protocol check",
+    )
+    def test_web_dfu_packet_matches_the_host_protocol(self):
+        module = (EDITOR / "static" / "open_recovery_dfu.mjs").as_uri()
+        script = (
+            f'import {{ encodePacket }} from "{module}";'
+            "const packet = encodePacket({"
+            "command:4,flags:1,session:0x12345678,sequence:9,offset:64,"
+            "payload:new TextEncoder().encode('abc')});"
+            "process.stdout.write(Buffer.from(packet).toString('hex'));"
+        )
+        actual = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        expected = (
+            "4e5846580204010078563412090000004000000003000000c2412435"
+            "36ad4c626162630000000000000000000000000000000000000000000000"
+            "000000000000"
+        )
+        self.assertEqual(actual, expected)
+
+
 @unittest.skipIf(
     shutil.which("cc") is None, "host C compiler is unavailable"
 )
@@ -476,24 +521,15 @@ class HostRenderTests(unittest.TestCase):
 class HardwareAppExtractionTests(unittest.TestCase):
     """The preset adapter must track main.c or fail loudly."""
 
-    def test_all_eight_presets_are_described(self):
+    def test_all_four_by_eight_presets_are_described(self):
         described = hardware_app.describe()
         self.assertTrue(described["available"])
         self.assertEqual(described["sample_rate"], 48000)
         self.assertEqual(
             [preset["name"] for preset in described["presets"]],
-            [
-                "Shine Drive",
-                "Wall Fuzz",
-                "Breathe Vibe",
-                "Echoes Tape",
-                "Rage Drive",
-                "Cocked Wah",
-                "Guerrilla Trem",
-                "Whammy Fuzz",
-            ],
+            list(hardware_app.PRESET_NAMES),
         )
-        self.assertEqual(len(set(hardware_app.preset_keys())), 8)
+        self.assertEqual(len(set(hardware_app.preset_keys())), 32)
 
     def test_extraction_keeps_the_dsp_and_drops_the_hardware(self):
         extracted = hardware_app.extract_dsp()

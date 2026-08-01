@@ -29,8 +29,9 @@ The finished pedal should:
    Modulation, and Drive/Amp are the initial baseline, not a fixed list.
 3. Compose multiple effects into programs and change programs live, from RAM,
    without rebooting or erasing NOR.
-4. Use configurable control gestures; the initial default is a five-second
-   footswitch hold to advance to the next program in the current catalog.
+4. Use one consistent two-second selection hold: Type positions 1–8 address
+   four preserved factory engines and four writable open engines. After an
+   engine loads, all eight Type positions select effects inside that engine.
 5. Expose all controls through a descriptor-driven parameter system so new
    effects can be added without rewriting the control layer.
 6. Accept recoverable firmware updates over USB.
@@ -403,9 +404,9 @@ Proposed version-1 interaction:
 
 - normal press: effect/bypass behavior, after the actual switch topology is
   mapped;
-- hold for five seconds: advance
-  `Delay -> Reverb -> Modulation -> Drive -> Delay`;
-- release after the hold: commit the live mode change;
+- Type position plus a two-second hold: commit engine slot 1–8 across the
+  required reset boundary;
+- after loading, all Type positions change effects inside that engine;
 - visible LED pattern: announce the destination before changing.
 
 The selected mode lives in RAM. Optional persistence occurs only on an
@@ -541,7 +542,8 @@ Work:
 
 - filtered ADC scanning;
 - debounced footswitch state machines;
-- configurable navigation gestures with a five-second hold default;
+- configurable navigation with the two-second eight-position selector as the
+  hardware default;
 - program/bank indication;
 - descriptor registry and caller-sized pass-through program chains;
 - click-free crossfade between prepared programs.

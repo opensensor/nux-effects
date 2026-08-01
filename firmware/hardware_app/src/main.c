@@ -83,7 +83,9 @@
 #define NCR2_EFFECT_RAMP_STEP UINT32_C(64)
 #define NCR2_SELECTOR_RAMP_STEP UINT32_C(128)
 #define NCR2_EFFECT_ROUTE_SETTLE_MS UINT32_C(20)
+/* Eight physical Type detents select programs inside the current engine. */
 #define NCR2_EFFECT_COUNT UINT32_C(8)
+#define NCR2_OPEN_EFFECT_COUNT UINT32_C(32)
 #define NCR2_SELECTOR_SETTLE_SAMPLES UINT32_C(3)
 /*
  * Measured detent spacing is about 511 counts and resting noise never
@@ -102,10 +104,11 @@
 /*
  * The original Reverb engine configures ADC1 channels 5, 8, 9 and 11 in
  * that order. Its parameter path identifies them as Decay, Tweak, Type and
- * Level. The native Type control has eight fixed positions, so this build
- * restores its intended job as an effect selector:
+ * Level. The native Type control has eight fixed positions. In normal use it
+ * selects one of the current engine's eight effects; during the hold gesture
+ * the same position selects one of eight engine slots:
  *
- *   Decay -> Amount, Tweak -> Character, Type -> Effect, Level -> Output.
+ *   Decay -> Amount, Tweak -> Character, Type -> Effect/Engine, Level -> Output.
  */
 #define NCR2_KNOB_AMOUNT_CHANNEL UINT32_C(5)
 #define NCR2_KNOB_CHARACTER_CHANNEL UINT32_C(8)
@@ -173,6 +176,8 @@ volatile uint32_t g_hardware_app_knob_amount = UINT32_C(1024);
 volatile uint32_t g_hardware_app_knob_character = UINT32_C(1024);
 volatile uint32_t g_hardware_app_knob_selector;
 volatile uint32_t g_hardware_app_knob_output = UINT32_C(1024);
+volatile uint32_t g_hardware_app_selector_position;
+volatile uint32_t g_hardware_app_open_engine_index;
 volatile uint32_t g_hardware_app_effect_index;
 volatile uint32_t g_hardware_app_factory_request_status;
 volatile uint32_t g_hardware_app_factory_launch_status;
@@ -304,7 +309,7 @@ static void clear_recovery_request(void)
  * clean peripheral state as a normal boot; the open app consumes GPR10 and
  * validates the preserved vectors before copying anything into ITCM.
  */
-static void reset_into_factory_engine(uint8_t engine)
+static void reset_into_engine_slot(uint8_t engine_slot)
 {
     ncr2_factory_engine_mailbox_t *const mailbox =
         (ncr2_factory_engine_mailbox_t *)(uintptr_t)
@@ -314,7 +319,7 @@ static void reset_into_factory_engine(uint8_t engine)
     g_hardware_app_factory_request_status =
         (uint32_t)ncr2_factory_engine_request_arm(
             mailbox,
-            engine);
+            engine_slot);
     if (g_hardware_app_factory_request_status !=
         NCR2_FACTORY_REQUEST_OK) {
         arm_recovery_request();
@@ -458,19 +463,120 @@ static uint32_t smooth_knob(
  * The ladder descends with knob position and spans 2..3581 rather than the
  * full 0..4095, so the equal 512-count bins this build previously used could
  * not fit it: positions 2 and 3 both landed in bin 5, and the top detent fell
- * three counts short of bin 7, leaving Whammy Fuzz unreachable. Index 0 is
- * the topmost printed position, so the effect list reads down the panel.
+ * three counts short of bin 7. Index 0 is the topmost printed position.
  */
 static const uint16_t g_selector_detent[NCR2_EFFECT_COUNT] = {
-    UINT16_C(3581), /* position 1, top    -> Shine Drive */
-    UINT16_C(3071), /* position 2         -> Wall Fuzz */
-    UINT16_C(2560), /* position 3         -> Breathe Vibe */
-    UINT16_C(2049), /* position 4         -> Echoes Tape */
-    UINT16_C(1538), /* position 5         -> Rage Drive */
-    UINT16_C(1028), /* position 6         -> Cocked Wah */
-    UINT16_C(516),  /* position 7         -> Guerrilla Trem */
-    UINT16_C(2),    /* position 8, bottom -> Whammy Fuzz */
+    UINT16_C(3581), /* position 1, top */
+    UINT16_C(3071), /* position 2 */
+    UINT16_C(2560), /* position 3 */
+    UINT16_C(2049), /* position 4 */
+    UINT16_C(1538), /* position 5 */
+    UINT16_C(1028), /* position 6 */
+    UINT16_C(516),  /* position 7 */
+    UINT16_C(2),    /* position 8, bottom */
 };
+
+enum
+{
+    /* Engine slot 5: Open Amp Studio. */
+    NCR2_EFFECT_AMP_GLASS_CLEAN = 0,
+    NCR2_EFFECT_AMP_TWEED_BLOOM = 1,
+    NCR2_EFFECT_AMP_CLASS_A_CHIME = 2,
+    NCR2_EFFECT_AMP_BRIT_STACK = 3,
+    NCR2_EFFECT_AMP_BROWN_LEAD = 4,
+    NCR2_EFFECT_AMP_CALI_RECTO = 5,
+    NCR2_EFFECT_AMP_BASS_FORGE = 6,
+    NCR2_EFFECT_AMP_ACOUSTIC_IR = 7,
+
+    /* Engine slot 6: Drive and Dynamics. */
+    NCR2_EFFECT_SHINE_DRIVE = 8,
+    NCR2_EFFECT_WALL_FUZZ = 9,
+    NCR2_EFFECT_RAGE_DRIVE = 10,
+    NCR2_EFFECT_COCKED_WAH = 11,
+    NCR2_EFFECT_STUDIO_COMP = 12,
+    NCR2_EFFECT_OCTAVE_FUZZ = 13,
+    NCR2_EFFECT_BIT_CRUSH = 14,
+    NCR2_EFFECT_NOISE_GATE = 15,
+
+    /* Engine slot 7: Motion and Pitch. */
+    NCR2_EFFECT_BREATHE_VIBE = 16,
+    NCR2_EFFECT_GUERRILLA_TREM = 17,
+    NCR2_EFFECT_DIMENSION_CHORUS = 18,
+    NCR2_EFFECT_JET_FLANGER = 19,
+    NCR2_EFFECT_PHASE_ORBIT = 20,
+    NCR2_EFFECT_ROTARY_CAB = 21,
+    NCR2_EFFECT_AUTO_WAH = 22,
+    NCR2_EFFECT_WHAMMY_FUZZ = 23,
+
+    /* Engine slot 8: Echo and Space. */
+    NCR2_EFFECT_ECHOES_TAPE = 24,
+    NCR2_EFFECT_DIGITAL_DELAY = 25,
+    NCR2_EFFECT_ANALOG_DELAY = 26,
+    NCR2_EFFECT_REVERSE_DELAY = 27,
+    NCR2_EFFECT_HALL_REVERB = 28,
+    NCR2_EFFECT_PLATE_REVERB = 29,
+    NCR2_EFFECT_SHIMMER_SPACE = 30,
+    NCR2_EFFECT_SPRING_TANK = 31,
+};
+
+/*
+ * Each open engine owns all eight Type positions, and every default effect
+ * has one home. No algorithm is repeated between engine slots.
+ */
+static const uint8_t g_open_engine_effects
+    [NCR2_OPEN_ENGINE_COUNT][NCR2_EFFECT_COUNT] = {
+    {
+        NCR2_EFFECT_AMP_GLASS_CLEAN,
+        NCR2_EFFECT_AMP_TWEED_BLOOM,
+        NCR2_EFFECT_AMP_CLASS_A_CHIME,
+        NCR2_EFFECT_AMP_BRIT_STACK,
+        NCR2_EFFECT_AMP_BROWN_LEAD,
+        NCR2_EFFECT_AMP_CALI_RECTO,
+        NCR2_EFFECT_AMP_BASS_FORGE,
+        NCR2_EFFECT_AMP_ACOUSTIC_IR,
+    },
+    {
+        NCR2_EFFECT_SHINE_DRIVE,
+        NCR2_EFFECT_WALL_FUZZ,
+        NCR2_EFFECT_RAGE_DRIVE,
+        NCR2_EFFECT_COCKED_WAH,
+        NCR2_EFFECT_STUDIO_COMP,
+        NCR2_EFFECT_OCTAVE_FUZZ,
+        NCR2_EFFECT_BIT_CRUSH,
+        NCR2_EFFECT_NOISE_GATE,
+    },
+    {
+        NCR2_EFFECT_BREATHE_VIBE,
+        NCR2_EFFECT_GUERRILLA_TREM,
+        NCR2_EFFECT_DIMENSION_CHORUS,
+        NCR2_EFFECT_JET_FLANGER,
+        NCR2_EFFECT_PHASE_ORBIT,
+        NCR2_EFFECT_ROTARY_CAB,
+        NCR2_EFFECT_AUTO_WAH,
+        NCR2_EFFECT_WHAMMY_FUZZ,
+    },
+    {
+        NCR2_EFFECT_ECHOES_TAPE,
+        NCR2_EFFECT_DIGITAL_DELAY,
+        NCR2_EFFECT_ANALOG_DELAY,
+        NCR2_EFFECT_REVERSE_DELAY,
+        NCR2_EFFECT_HALL_REVERB,
+        NCR2_EFFECT_PLATE_REVERB,
+        NCR2_EFFECT_SHIMMER_SPACE,
+        NCR2_EFFECT_SPRING_TANK,
+    },
+};
+
+static uint32_t open_effect_for_position(
+    uint32_t engine,
+    uint32_t position)
+{
+    if (engine >= NCR2_OPEN_ENGINE_COUNT ||
+        position >= NCR2_EFFECT_COUNT) {
+        return NCR2_EFFECT_SHINE_DRIVE;
+    }
+    return g_open_engine_effects[engine][position];
+}
 
 static uint32_t selector_distance(uint32_t sample, uint32_t effect)
 {
@@ -562,14 +668,23 @@ static uint8_t sample_knobs(uint8_t first_sample)
     }
 
     if (first_sample != UINT8_C(0)) {
+        const uint32_t position = quantize_selector(selector);
+
         g_hardware_app_knob_amount = amount;
         g_hardware_app_knob_character = character;
         g_hardware_app_knob_selector = selector;
         g_hardware_app_knob_output = output;
-        g_hardware_app_effect_index = quantize_selector(selector);
-        g_selector_candidate = g_hardware_app_effect_index;
+        g_hardware_app_selector_position = position;
+        g_hardware_app_effect_index = open_effect_for_position(
+            g_hardware_app_open_engine_index,
+            position);
+        g_selector_candidate = position;
         g_selector_candidate_samples = UINT32_C(0);
     } else {
+        const uint32_t position = update_selector(
+            selector,
+            g_hardware_app_selector_position);
+
         g_hardware_app_knob_amount =
             smooth_knob(g_hardware_app_knob_amount, amount);
         g_hardware_app_knob_character =
@@ -577,10 +692,10 @@ static uint8_t sample_knobs(uint8_t first_sample)
         g_hardware_app_knob_selector = selector;
         g_hardware_app_knob_output =
             smooth_knob(g_hardware_app_knob_output, output);
-        g_hardware_app_effect_index =
-            update_selector(
-                selector,
-                g_hardware_app_effect_index);
+        g_hardware_app_selector_position = position;
+        g_hardware_app_effect_index = open_effect_for_position(
+            g_hardware_app_open_engine_index,
+            position);
     }
     __DMB();
     return UINT8_C(1);
@@ -630,18 +745,6 @@ static int32_t capture_frame(const int32_t *frame_input)
 volatile uint32_t g_hardware_app_emit_tone;
 volatile uint32_t g_hardware_app_enable_effect;
 
-enum
-{
-    NCR2_EFFECT_SHINE_DRIVE = 0,
-    NCR2_EFFECT_WALL_FUZZ = 1,
-    NCR2_EFFECT_BREATHE_VIBE = 2,
-    NCR2_EFFECT_ECHOES_TAPE = 3,
-    NCR2_EFFECT_RAGE_DRIVE = 4,
-    NCR2_EFFECT_COCKED_WAH = 5,
-    NCR2_EFFECT_GUERRILLA_TREM = 6,
-    NCR2_EFFECT_WHAMMY_FUZZ = 7,
-};
-
 typedef struct ncr2_effect_parameters
 {
     uint32_t amount_q15;
@@ -672,6 +775,11 @@ static uint32_t g_effect_ramp;
 static uint32_t g_selector_ramp = NCR2_PARAMETER_Q15_ONE;
 static uint32_t g_current_effect;
 static uint32_t g_delay_write_index;
+static uint32_t g_cabinet_write_index;
+static uint32_t g_sample_hold_counter;
+static int32_t g_sample_hold_value;
+static int32_t g_multi_state[8];
+static int32_t g_cabinet_history[8];
 static int32_t g_delay_buffer[NCR2_DELAY_BUFFER_FRAMES]
     __attribute__((section(".sdram_bss"), aligned(32)));
 
@@ -821,6 +929,89 @@ static int32_t shape_drive(
         (int64_t)NCR2_SAFE_OUTPUT_PEAK);
 }
 
+/*
+ * Original low-latency amp/cab voices for Open Amp Studio. This is a
+ * clean-room design, not an extraction of NUX's TSAC-HD models. Each voice
+ * has its own gain structure, pre-emphasis and compact 8-tap cabinet IR.
+ * Amount is preamp gain; Character moves from direct amp to cabinet tone.
+ */
+static int32_t process_amp_voice(
+    int32_t input,
+    const ncr2_effect_parameters_t *parameters,
+    uint32_t voice)
+{
+    static const uint32_t base_drive_q12[8] = {
+        UINT32_C(4096), UINT32_C(6144), UINT32_C(7168), UINT32_C(10240),
+        UINT32_C(12288), UINT32_C(16384), UINT32_C(5120), UINT32_C(4096),
+    };
+    static const uint32_t drive_range_q12[8] = {
+        UINT32_C(12288), UINT32_C(24576), UINT32_C(28672), UINT32_C(53248),
+        UINT32_C(69632), UINT32_C(94208), UINT32_C(20480), UINT32_C(8192),
+    };
+    static const uint32_t pre_alpha_q15[8] = {
+        UINT32_C(2600), UINT32_C(3400), UINT32_C(5200), UINT32_C(7000),
+        UINT32_C(8200), UINT32_C(9600), UINT32_C(1800), UINT32_C(12000),
+    };
+    static const uint32_t tone_alpha_q15[8] = {
+        UINT32_C(13000), UINT32_C(9000), UINT32_C(17000), UINT32_C(10500),
+        UINT32_C(12500), UINT32_C(8500), UINT32_C(6500), UINT32_C(22000),
+    };
+    static const int16_t cabinet_ir_q15[8][8] = {
+        { 2200, 5600, 9000, 7800, 5000, 2300, -900, -2200 },
+        { 1200, 4800, 9400, 8500, 5600, 1000, -2600, -4200 },
+        { 1800, 7000, 9800, 6000, 1000, -2800, -2100, 2400 },
+        { 800, 4000, 8500, 8800, 5000, 0, -3300, -3600 },
+        { 500, 3000, 7600, 9300, 6500, 800, -3900, -4800 },
+        { 300, 2400, 6500, 9000, 7400, 2300, -3300, -6300 },
+        { 3200, 7400, 9000, 5900, 2600, 200, -900, -600 },
+        { 6200, 10500, 7200, 1800, -3000, -3000, -200, 1800 },
+    };
+    int64_t convolved = INT64_C(0);
+
+    if (voice >= UINT32_C(8)) {
+        voice = UINT32_C(0);
+    }
+    const int32_t body = lowpass_sample(
+        input,
+        &g_effect_pre_state,
+        pre_alpha_q15[voice]);
+    const int32_t emphasized = (voice == UINT32_C(6))
+        ? body
+        : (int32_t)clamp_symmetric(
+            (int64_t)input +
+                ((int64_t)input - (int64_t)body) / INT64_C(2),
+            (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+    const uint32_t drive_q12 =
+        base_drive_q12[voice] +
+        (parameters->amount_q15 * drive_range_q12[voice]) /
+            NCR2_PARAMETER_Q15_ONE;
+    const int32_t preamp = shape_drive(
+        emphasized,
+        drive_q12,
+        tone_alpha_q15[voice],
+        (voice == UINT32_C(7))
+            ? UINT32_C(2048)
+            : parameters->amount_q15 / UINT32_C(2));
+
+    g_cabinet_history[g_cabinet_write_index] = preamp;
+    for (uint32_t tap = UINT32_C(0); tap < UINT32_C(8); ++tap) {
+        const uint32_t index =
+            (g_cabinet_write_index - tap) & UINT32_C(7);
+        convolved +=
+            (int64_t)g_cabinet_history[index] *
+            (int64_t)cabinet_ir_q15[voice][tap];
+    }
+    g_cabinet_write_index =
+        (g_cabinet_write_index + UINT32_C(1)) & UINT32_C(7);
+    const int32_t cabinet = (int32_t)clamp_symmetric(
+        convolved / INT64_C(32768),
+        (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+    const uint32_t cabinet_mix =
+        UINT32_C(16384) + parameters->character_q15 / UINT32_C(2);
+
+    return blend_samples_q15(preamp, cabinet, cabinet_mix);
+}
+
 static void reset_transient_effect_state(void)
 {
     g_effect_tone_state = INT32_C(0);
@@ -833,6 +1024,19 @@ static void reset_transient_effect_state(void)
     g_tape_phase = UINT32_C(0);
     g_tremolo_phase = UINT32_C(0);
     g_whammy_phase = UINT32_C(0);
+    g_cabinet_write_index = UINT32_C(0);
+    g_sample_hold_counter = UINT32_C(0);
+    g_sample_hold_value = INT32_C(0);
+    for (uint32_t index = UINT32_C(0);
+         index < UINT32_C(8);
+         ++index) {
+        g_multi_state[index] = INT32_C(0);
+    }
+    for (uint32_t index = UINT32_C(0);
+         index < UINT32_C(8);
+         ++index) {
+        g_cabinet_history[index] = INT32_C(0);
+    }
 }
 
 static void initialize_effect_processor(void)
@@ -847,7 +1051,7 @@ static void initialize_effect_processor(void)
     g_effect_ramp = UINT32_C(0);
     g_selector_ramp = NCR2_PARAMETER_Q15_ONE;
     g_current_effect =
-        (g_hardware_app_effect_index < NCR2_EFFECT_COUNT)
+        (g_hardware_app_effect_index < NCR2_OPEN_EFFECT_COUNT)
             ? g_hardware_app_effect_index
             : UINT32_C(0);
     reset_transient_effect_state();
@@ -855,8 +1059,8 @@ static void initialize_effect_processor(void)
 
 static void update_effect_selection(uint32_t requested)
 {
-    if (requested >= NCR2_EFFECT_COUNT) {
-        requested = NCR2_EFFECT_COUNT - UINT32_C(1);
+    if (requested >= NCR2_OPEN_EFFECT_COUNT) {
+        requested = NCR2_OPEN_EFFECT_COUNT - UINT32_C(1);
     }
     if (requested != g_current_effect) {
         if (g_selector_ramp > NCR2_SELECTOR_RAMP_STEP) {
@@ -936,6 +1140,20 @@ static int32_t process_selected_effect(
     int64_t delay_write = input;
 
     switch (g_current_effect) {
+    case NCR2_EFFECT_AMP_GLASS_CLEAN:
+    case NCR2_EFFECT_AMP_TWEED_BLOOM:
+    case NCR2_EFFECT_AMP_CLASS_A_CHIME:
+    case NCR2_EFFECT_AMP_BRIT_STACK:
+    case NCR2_EFFECT_AMP_BROWN_LEAD:
+    case NCR2_EFFECT_AMP_CALI_RECTO:
+    case NCR2_EFFECT_AMP_BASS_FORGE:
+    case NCR2_EFFECT_AMP_ACOUSTIC_IR:
+        sample = process_amp_voice(
+            input,
+            parameters,
+            g_current_effect - NCR2_EFFECT_AMP_GLASS_CLEAN);
+        break;
+
     case NCR2_EFFECT_SHINE_DRIVE:
         {
             const uint32_t tone_alpha_q15 =
@@ -1185,6 +1403,120 @@ static int32_t process_selected_effect(
         }
         break;
 
+    case NCR2_EFFECT_STUDIO_COMP:
+        {
+            const int32_t magnitude = (input < INT32_C(0))
+                ? (int32_t)(-(int64_t)input)
+                : input;
+            const uint32_t attack = UINT32_C(6000) +
+                parameters->character_q15 / UINT32_C(2);
+            const uint32_t release = UINT32_C(80) +
+                parameters->character_q15 / UINT32_C(128);
+            const uint32_t coefficient =
+                (magnitude > g_effect_aux_state) ? attack : release;
+            const int32_t envelope = lowpass_sample(
+                magnitude,
+                &g_effect_aux_state,
+                coefficient);
+            const int64_t threshold =
+                INT64_C(0x01000000) +
+                ((int64_t)(NCR2_PARAMETER_Q15_ONE -
+                    parameters->amount_q15) * INT64_C(0x03000000)) /
+                    INT64_C(32768);
+            int64_t gain_q15 = INT64_C(32768);
+
+            if ((int64_t)envelope > threshold) {
+                gain_q15 =
+                    INT64_C(32768) * threshold /
+                    (int64_t)envelope;
+                gain_q15 = INT64_C(16384) + gain_q15 / INT64_C(2);
+            }
+            const int64_t makeup_q15 =
+                INT64_C(32768) +
+                (int64_t)parameters->amount_q15;
+            sample = clamp_symmetric(
+                (int64_t)input * gain_q15 * makeup_q15 /
+                    (INT64_C(32768) * INT64_C(32768)),
+                (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+        }
+        break;
+
+    case NCR2_EFFECT_OCTAVE_FUZZ:
+        {
+            const int32_t fuzz = shape_drive(
+                input,
+                UINT32_C(32768) + parameters->amount_q15 * UINT32_C(3),
+                UINT32_C(10000),
+                UINT32_C(28672));
+            const int32_t rectified = (fuzz < INT32_C(0))
+                ? (int32_t)(-(int64_t)fuzz)
+                : fuzz;
+            const int32_t octave = rectified -
+                lowpass_sample(
+                    rectified,
+                    &g_effect_aux_state,
+                    UINT32_C(900));
+            sample = blend_samples_q15(
+                fuzz,
+                octave,
+                UINT32_C(12288) +
+                    parameters->character_q15 / UINT32_C(2));
+        }
+        break;
+
+    case NCR2_EFFECT_BIT_CRUSH:
+        {
+            const uint32_t hold_frames = UINT32_C(1) +
+                (parameters->amount_q15 * UINT32_C(63)) /
+                    NCR2_PARAMETER_Q15_ONE;
+            const uint32_t discarded_bits = UINT32_C(12) +
+                (parameters->character_q15 * UINT32_C(10)) /
+                    NCR2_PARAMETER_Q15_ONE;
+            if (g_sample_hold_counter == UINT32_C(0)) {
+                const int32_t quantum =
+                    INT32_C(1) << (int32_t)discarded_bits;
+                g_sample_hold_value = (input / quantum) * quantum;
+                g_sample_hold_counter = hold_frames;
+            }
+            --g_sample_hold_counter;
+            sample = blend_samples_q15(
+                input,
+                g_sample_hold_value,
+                UINT32_C(24576));
+        }
+        break;
+
+    case NCR2_EFFECT_NOISE_GATE:
+        {
+            const int32_t magnitude = (input < INT32_C(0))
+                ? (int32_t)(-(int64_t)input)
+                : input;
+            const int32_t envelope = lowpass_sample(
+                magnitude,
+                &g_effect_aux_state,
+                (magnitude > g_effect_aux_state)
+                    ? UINT32_C(12000)
+                    : UINT32_C(160));
+            const int32_t threshold =
+                INT32_C(0x00080000) +
+                (int32_t)(
+                    (parameters->amount_q15 * UINT32_C(0x01800000)) /
+                    NCR2_PARAMETER_Q15_ONE);
+            const uint32_t open_target =
+                (envelope > threshold)
+                    ? NCR2_PARAMETER_Q15_ONE
+                    : UINT32_C(0);
+            const int32_t smoothed_gate = lowpass_sample(
+                (int32_t)open_target,
+                &g_effect_pre_state,
+                UINT32_C(800) +
+                    parameters->character_q15 / UINT32_C(32));
+            sample =
+                (int64_t)input * (int64_t)smoothed_gate /
+                INT64_C(32768);
+        }
+        break;
+
     case NCR2_EFFECT_GUERRILLA_TREM:
         {
             const int32_t triangle =
@@ -1215,8 +1547,187 @@ static int32_t process_selected_effect(
         }
         break;
 
+    case NCR2_EFFECT_DIMENSION_CHORUS:
+        {
+            const int32_t triangle = triangle_q15(g_vibe_phase);
+            const uint32_t sweep =
+                (uint32_t)(triangle + INT32_C(32768));
+            const uint32_t depth = UINT32_C(72) +
+                (parameters->character_q15 * UINT32_C(240)) /
+                    NCR2_PARAMETER_Q15_ONE;
+            const uint32_t delay_a = UINT32_C(720) +
+                (sweep * depth) / UINT32_C(65535);
+            const uint32_t delay_b = UINT32_C(960) +
+                ((UINT32_C(65535) - sweep) * depth) /
+                    UINT32_C(65535);
+            const int32_t chorus = (int32_t)(
+                ((int64_t)g_delay_buffer[
+                    (g_delay_write_index - delay_a) &
+                    NCR2_DELAY_BUFFER_MASK] +
+                 (int64_t)g_delay_buffer[
+                    (g_delay_write_index - delay_b) &
+                    NCR2_DELAY_BUFFER_MASK]) /
+                INT64_C(2));
+
+            g_vibe_phase += phase_increment(
+                UINT32_C(180) +
+                (parameters->amount_q15 * UINT32_C(850)) /
+                    NCR2_PARAMETER_Q15_ONE);
+            sample = blend_samples_q15(
+                input,
+                chorus,
+                UINT32_C(8192) +
+                    parameters->character_q15 / UINT32_C(4));
+        }
+        break;
+
+    case NCR2_EFFECT_JET_FLANGER:
+        {
+            const int32_t triangle = triangle_q15(g_vibe_phase);
+            const uint32_t sweep =
+                (uint32_t)(triangle + INT32_C(32768));
+            const uint32_t delay_frames = UINT32_C(24) +
+                (sweep * (UINT32_C(48) +
+                    parameters->character_q15 / UINT32_C(256))) /
+                    UINT32_C(65535);
+            const int32_t delayed = g_delay_buffer[
+                (g_delay_write_index - delay_frames) &
+                NCR2_DELAY_BUFFER_MASK];
+            const uint32_t feedback = UINT32_C(8192) +
+                parameters->character_q15 / UINT32_C(2);
+
+            g_vibe_phase += phase_increment(
+                UINT32_C(80) +
+                (parameters->amount_q15 * UINT32_C(1200)) /
+                    NCR2_PARAMETER_Q15_ONE);
+            sample = blend_samples_q15(input, delayed, UINT32_C(16384));
+            delay_write = (int64_t)input +
+                (int64_t)delayed * (int64_t)feedback /
+                    INT64_C(32768);
+        }
+        break;
+
+    case NCR2_EFFECT_PHASE_ORBIT:
+        {
+            const int32_t triangle = triangle_q15(g_vibe_phase);
+            const uint32_t sweep =
+                (uint32_t)(triangle + INT32_C(32768));
+            const uint32_t coefficient = UINT32_C(2500) +
+                (sweep * (UINT32_C(11000) +
+                    parameters->character_q15 / UINT32_C(3))) /
+                    UINT32_C(65535);
+            int32_t phased = input;
+
+            for (uint32_t stage = UINT32_C(0);
+                 stage < UINT32_C(4);
+                 ++stage) {
+                const int64_t next =
+                    (int64_t)g_multi_state[stage] +
+                    ((int64_t)phased -
+                     (int64_t)g_multi_state[stage]) *
+                        (int64_t)coefficient / INT64_C(32768);
+                const int32_t low = (int32_t)clamp_symmetric(
+                    next,
+                    (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+                g_multi_state[stage] = low;
+                phased = phased - low;
+            }
+            g_vibe_phase += phase_increment(
+                UINT32_C(70) +
+                (parameters->amount_q15 * UINT32_C(1700)) /
+                    NCR2_PARAMETER_Q15_ONE);
+            sample = blend_samples_q15(
+                input,
+                phased,
+                UINT32_C(16384) +
+                    parameters->character_q15 / UINT32_C(4));
+        }
+        break;
+
+    case NCR2_EFFECT_ROTARY_CAB:
+        {
+            const int32_t triangle = triangle_q15(g_vibe_phase);
+            const uint32_t sweep =
+                (uint32_t)(triangle + INT32_C(32768));
+            const uint32_t delay_frames = UINT32_C(48) +
+                (sweep * UINT32_C(120)) / UINT32_C(65535);
+            const int32_t horn = g_delay_buffer[
+                (g_delay_write_index - delay_frames) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t drum = lowpass_sample(
+                input,
+                &g_effect_aux_state,
+                UINT32_C(1800));
+            const int64_t horn_gain = INT64_C(24576) +
+                (int64_t)triangle / INT64_C(4);
+            const int64_t drum_gain = INT64_C(24576) -
+                (int64_t)triangle / INT64_C(8);
+            const int32_t rotary = (int32_t)clamp_symmetric(
+                ((int64_t)horn * horn_gain +
+                 (int64_t)drum * drum_gain) /
+                    INT64_C(49152),
+                (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+
+            g_vibe_phase += phase_increment(
+                UINT32_C(450) +
+                (parameters->amount_q15 * UINT32_C(6200)) /
+                    NCR2_PARAMETER_Q15_ONE);
+            sample = blend_samples_q15(
+                input,
+                rotary,
+                UINT32_C(16384) +
+                    parameters->character_q15 / UINT32_C(4));
+        }
+        break;
+
+    case NCR2_EFFECT_AUTO_WAH:
+        {
+            const int32_t magnitude = (input < INT32_C(0))
+                ? (int32_t)(-(int64_t)input)
+                : input;
+            const int32_t envelope = lowpass_sample(
+                magnitude,
+                &g_effect_aux_state,
+                (magnitude > g_effect_aux_state)
+                    ? UINT32_C(9000)
+                    : UINT32_C(120));
+            const uint32_t normalized_raw = (uint32_t)(
+                ((uint64_t)(uint32_t)envelope * UINT64_C(32768)) /
+                (uint64_t)NCR2_SAFE_OUTPUT_PEAK);
+            const uint32_t normalized =
+                (normalized_raw > NCR2_PARAMETER_Q15_ONE)
+                    ? NCR2_PARAMETER_Q15_ONE
+                    : normalized_raw;
+            const uint32_t coefficient = UINT32_C(900) +
+                (normalized * (UINT32_C(6000) +
+                    parameters->amount_q15 / UINT32_C(3))) /
+                    NCR2_PARAMETER_Q15_ONE;
+            const int64_t low = (int64_t)g_wah_low_state +
+                (int64_t)coefficient *
+                    (int64_t)g_wah_band_state / INT64_C(32768);
+            const int64_t high = (int64_t)input - low -
+                (int64_t)(UINT32_C(18000) -
+                    parameters->character_q15 / UINT32_C(3)) *
+                    (int64_t)g_wah_band_state / INT64_C(32768);
+            const int64_t band = (int64_t)g_wah_band_state +
+                (int64_t)coefficient * high / INT64_C(32768);
+
+            g_wah_low_state = (int32_t)clamp_symmetric(
+                low,
+                INT64_C(4) * (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+            g_wah_band_state = (int32_t)clamp_symmetric(
+                band,
+                INT64_C(4) * (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+            sample = blend_samples_q15(
+                input,
+                (int32_t)clamp_symmetric(
+                    band,
+                    (int64_t)NCR2_SAFE_OUTPUT_PEAK),
+                UINT32_C(24576));
+        }
+        break;
+
     case NCR2_EFFECT_WHAMMY_FUZZ:
-    default:
         {
             const uint32_t phase_a = g_whammy_phase;
             const uint32_t phase_b =
@@ -1284,6 +1795,227 @@ static int32_t process_selected_effect(
                 pitched_mix,
                 UINT32_C(8192));
         }
+        break;
+
+    case NCR2_EFFECT_DIGITAL_DELAY:
+        {
+            const uint32_t delay_frames = UINT32_C(2400) +
+                (parameters->amount_q15 * UINT32_C(26400)) /
+                    NCR2_PARAMETER_Q15_ONE;
+            const int32_t delayed = g_delay_buffer[
+                (g_delay_write_index - delay_frames) &
+                NCR2_DELAY_BUFFER_MASK];
+            const uint32_t feedback = UINT32_C(4096) +
+                (parameters->character_q15 * UINT32_C(23552)) /
+                    NCR2_PARAMETER_Q15_ONE;
+
+            sample = blend_samples_q15(
+                input,
+                delayed,
+                UINT32_C(12288));
+            delay_write = (int64_t)input +
+                (int64_t)delayed * (int64_t)feedback /
+                    INT64_C(32768);
+        }
+        break;
+
+    case NCR2_EFFECT_ANALOG_DELAY:
+        {
+            const uint32_t delay_frames = UINT32_C(3600) +
+                (parameters->amount_q15 * UINT32_C(25200)) /
+                    NCR2_PARAMETER_Q15_ONE;
+            const int32_t delayed = g_delay_buffer[
+                (g_delay_write_index - delay_frames) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t dark = lowpass_sample(
+                delayed,
+                &g_delay_filter_state,
+                UINT32_C(1800) +
+                    (NCR2_PARAMETER_Q15_ONE -
+                     parameters->character_q15) / UINT32_C(8));
+            const uint32_t feedback = UINT32_C(8192) +
+                parameters->character_q15 / UINT32_C(2);
+
+            sample = blend_samples_q15(input, dark, UINT32_C(14336));
+            delay_write = (int64_t)input +
+                (int64_t)dark * (int64_t)feedback /
+                    INT64_C(32768);
+        }
+        break;
+
+    case NCR2_EFFECT_REVERSE_DELAY:
+        {
+            const uint32_t window = UINT32_C(4096) +
+                (parameters->amount_q15 * UINT32_C(12288)) /
+                    NCR2_PARAMETER_Q15_ONE;
+            const uint32_t phase = g_delay_write_index % window;
+            const uint32_t reverse_index =
+                (g_delay_write_index + window - UINT32_C(1) -
+                 UINT32_C(2) * phase) & NCR2_DELAY_BUFFER_MASK;
+            const int32_t reversed = g_delay_buffer[reverse_index];
+            const uint32_t edge = (phase < window / UINT32_C(2))
+                ? phase
+                : window - phase;
+            const uint32_t fade_q15 = (edge < UINT32_C(256))
+                ? edge * UINT32_C(128)
+                : NCR2_PARAMETER_Q15_ONE;
+            const int32_t faded = (int32_t)(
+                (int64_t)reversed * (int64_t)fade_q15 /
+                INT64_C(32768));
+
+            sample = blend_samples_q15(
+                input,
+                faded,
+                UINT32_C(12288) +
+                    parameters->character_q15 / UINT32_C(4));
+        }
+        break;
+
+    case NCR2_EFFECT_HALL_REVERB:
+        {
+            const int32_t tap_a = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(1493)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t tap_b = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(4217)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t tap_c = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(7013)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t tap_d = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(11003)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t field = (int32_t)(
+                ((int64_t)tap_a + (int64_t)tap_b +
+                 (int64_t)tap_c + (int64_t)tap_d) /
+                INT64_C(4));
+            const int32_t dark = lowpass_sample(
+                field,
+                &g_delay_filter_state,
+                UINT32_C(2200) +
+                    parameters->character_q15 / UINT32_C(8));
+            const uint32_t decay = UINT32_C(15000) +
+                parameters->amount_q15 / UINT32_C(3);
+
+            sample = blend_samples_q15(
+                input,
+                dark,
+                UINT32_C(8192) +
+                    parameters->character_q15 / UINT32_C(4));
+            delay_write = (int64_t)input +
+                (int64_t)dark * (int64_t)decay /
+                    INT64_C(32768);
+        }
+        break;
+
+    case NCR2_EFFECT_PLATE_REVERB:
+        {
+            const int32_t tap_a = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(1051)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t tap_b = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(2203)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t tap_c = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(3469)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t tap_d = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(4787)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t diffusion = (int32_t)clamp_symmetric(
+                ((int64_t)tap_a * INT64_C(3) -
+                 (int64_t)tap_b * INT64_C(2) +
+                 (int64_t)tap_c * INT64_C(2) +
+                 (int64_t)tap_d) /
+                    INT64_C(8),
+                (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+            const uint32_t decay = UINT32_C(13500) +
+                parameters->amount_q15 / UINT32_C(3);
+
+            sample = blend_samples_q15(
+                input,
+                diffusion,
+                UINT32_C(10240) +
+                    parameters->character_q15 / UINT32_C(4));
+            delay_write = (int64_t)input +
+                (int64_t)diffusion * (int64_t)decay /
+                    INT64_C(32768);
+        }
+        break;
+
+    case NCR2_EFFECT_SHIMMER_SPACE:
+        {
+            const uint32_t position = g_whammy_phase >> 16;
+            const uint32_t delay_a = UINT32_C(160) +
+                ((UINT32_C(65535) - position) * UINT32_C(1400)) /
+                    UINT32_C(65536);
+            const uint32_t delay_b = UINT32_C(160) +
+                (position * UINT32_C(1400)) / UINT32_C(65536);
+            const int32_t shifted = (int32_t)(
+                ((int64_t)g_delay_buffer[
+                    (g_delay_write_index - delay_a) &
+                    NCR2_DELAY_BUFFER_MASK] +
+                 (int64_t)g_delay_buffer[
+                    (g_delay_write_index - delay_b) &
+                    NCR2_DELAY_BUFFER_MASK]) /
+                INT64_C(2));
+            const int32_t cloud = lowpass_sample(
+                shifted,
+                &g_delay_filter_state,
+                UINT32_C(5000));
+            const uint32_t feedback = UINT32_C(13000) +
+                parameters->amount_q15 / UINT32_C(3);
+
+            g_whammy_phase += UINT32_C(4194304);
+            sample = blend_samples_q15(
+                input,
+                cloud,
+                UINT32_C(8192) +
+                    parameters->character_q15 / UINT32_C(3));
+            delay_write = (int64_t)input +
+                (int64_t)cloud * (int64_t)feedback /
+                    INT64_C(32768);
+        }
+        break;
+
+    case NCR2_EFFECT_SPRING_TANK:
+        {
+            const int32_t early = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(613)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t middle = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(1297)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t late = g_delay_buffer[
+                (g_delay_write_index - UINT32_C(2381)) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t splash = (int32_t)clamp_symmetric(
+                ((int64_t)early * INT64_C(3) -
+                 (int64_t)middle * INT64_C(2) +
+                 (int64_t)late) /
+                    INT64_C(4),
+                (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+            const int32_t body = lowpass_sample(
+                splash,
+                &g_effect_aux_state,
+                UINT32_C(3200));
+            const int32_t boing = splash - body;
+            const uint32_t feedback = UINT32_C(10000) +
+                parameters->amount_q15 / UINT32_C(4);
+
+            sample = blend_samples_q15(
+                input,
+                boing,
+                UINT32_C(8192) +
+                    parameters->character_q15 / UINT32_C(3));
+            delay_write = (int64_t)input +
+                (int64_t)boing * (int64_t)feedback /
+                    INT64_C(32768);
+        }
+        break;
+
+    default:
+        sample = input;
         break;
     }
 
@@ -1353,11 +2085,22 @@ void ncr2_factory_audio_process_block(
             (dry == INT32_MIN)
                 ? INT32_MAX
                 : ((dry < 0) ? -dry : dry);
-        const int32_t processed =
-            process_selected_effect(
+        int32_t processed = filtered_input;
+        int32_t sample;
+
+        /*
+         * Analog bypass does not need a speculative DSP render. Avoiding it
+         * also guarantees that a newly installed, CPU-heavy user engine can
+         * still boot, confirm, and accept control before it is engaged. The
+         * existing 20 ms pre-relay settle starts processing and ramps the
+         * selected effect while the dry route is still connected.
+         */
+        if (enabled != UINT32_C(0) ||
+            g_effect_ramp != UINT32_C(0)) {
+            processed = process_selected_effect(
                 filtered_input,
                 &parameters);
-        int32_t sample;
+        }
 
         if (magnitude > peak) {
             peak = magnitude;
@@ -1396,7 +2139,7 @@ void ncr2_factory_audio_process_block(
  * Run the physically verified open audio path as an ordinary stompbox.
  * The early status flashes remain useful if codec or DMA initialization
  * regresses, after which the footswitch owns bypass and the four panel
- * controls drive the eight-effect processor indefinitely.
+ * controls drive the selected open processor indefinitely.
  */
 void application_main(void)
 {
@@ -1404,7 +2147,7 @@ void application_main(void)
     uint32_t blocks_before;
     uint32_t tx_blocks_before;
 #endif
-    uint8_t requested_factory_engine = UINT8_C(0);
+    uint8_t requested_engine_slot = UINT8_C(0);
     ncr2_codec_bus_t codec_bus = { UINT32_C(0), UINT8_C(0) };
 
     /*
@@ -1416,12 +2159,20 @@ void application_main(void)
         (uint32_t)ncr2_factory_engine_request_consume(
             (ncr2_factory_engine_mailbox_t *)(uintptr_t)
                 NCR2_FACTORY_REQUEST_MAILBOX_ADDRESS,
-            &requested_factory_engine);
+            &requested_engine_slot);
     if (g_hardware_app_factory_request_status ==
         NCR2_FACTORY_REQUEST_OK) {
-        g_hardware_app_factory_launch_status =
-            (uint32_t)ncr2_factory_engine_launch(
-                requested_factory_engine);
+        if (requested_engine_slot < NCR2_FACTORY_ENGINE_COUNT) {
+            g_hardware_app_factory_launch_status =
+                (uint32_t)ncr2_factory_engine_launch(
+                    requested_engine_slot);
+        } else {
+            g_hardware_app_open_engine_index =
+                (uint32_t)(
+                    requested_engine_slot - NCR2_OPEN_ENGINE_FIRST);
+            g_hardware_app_factory_launch_status =
+                NCR2_FACTORY_LAUNCH_OK;
+        }
     }
 
     /*
@@ -1589,11 +2340,10 @@ void application_main(void)
      * exact stock post-SAI control state and expose an ordinary stompbox
      * control indefinitely. The
      * active-low main footswitch is debounced. A short press toggles on its
-     * release; holding for two seconds instead launches the preserved
-     * factory engine selected by the current pair of Type positions. The
-     * factory RAM bridge provides two gestures: hold for two to five seconds
-     * and release to launch the Type-selected factory engine, or hold for at
-     * least five seconds and release to warm-reset back into this open bank. Off
+     * release. During a two-second hold, Type positions 1-8 select engine
+     * slots 1-8. Slots 1-4 are factory and slots 5-8 are open. After the
+     * selected engine loads, all eight Type positions select effects inside
+     * that engine. No second hold duration exists. Off
      * selects the traced IO25 bypass route and emits no DSP signal. On
      * selects the complementary IO24 route, enables the bounded multi-effect
      * processor, and lights the red die. A physical recovery boot remains
@@ -1604,6 +2354,7 @@ void application_main(void)
             ncr2_factory_board_switch_pressed();
         uint8_t debounced_pressed = raw_pressed;
         uint8_t effect_enabled = UINT8_C(0);
+        uint8_t engine_select_armed = UINT8_C(0);
         uint32_t stable_ms = UINT32_C(0);
         ncr2_footswitch_gesture_t footswitch_gesture;
 
@@ -1670,18 +2421,32 @@ void application_main(void)
                         : NCR2_LED_OFF);
             } else if (
                 footswitch_event == NCR2_FOOTSWITCH_EVENT_HOLD) {
-                const uint8_t factory_engine =
-                    (uint8_t)(
-                        g_hardware_app_effect_index / UINT32_C(2));
-
-                /* Silence and bypass before announcing the selected bank. */
+                /*
+                 * Match the factory monitor: reaching two seconds arms a
+                 * selection, and release commits it. The release boundary
+                 * keeps a held switch out of power-on recovery detection.
+                 */
+                engine_select_armed = UINT8_C(1);
+                effect_enabled = UINT8_C(0);
                 ncr2_factory_board_set_relay(UINT8_C(0));
                 g_hardware_app_enable_effect = UINT32_C(0);
+                ncr2_factory_board_set_indicator(NCR2_LED_BOTH);
+            } else if (engine_select_armed != UINT8_C(0) &&
+                       debounced_pressed == UINT8_C(0)) {
+                if (g_hardware_app_knob_adc_ready != UINT32_C(0)) {
+                    (void)sample_knobs(UINT8_C(0));
+                }
+                const uint32_t selector_position =
+                    g_hardware_app_selector_position;
+                const uint8_t engine_slot =
+                    (uint8_t)selector_position;
+
+                /* Announce the final Type position and load that slot. */
                 ncr2_factory_board_set_indicator(NCR2_LED_OFF);
                 flash_code(
                     NCR2_LED_BOTH,
-                    (uint32_t)factory_engine + UINT32_C(1));
-                reset_into_factory_engine(factory_engine);
+                    (uint32_t)engine_slot + UINT32_C(1));
+                reset_into_engine_slot(engine_slot);
             }
             if (g_hardware_app_knob_adc_ready != UINT32_C(0)) {
                 (void)sample_knobs(UINT8_C(0));

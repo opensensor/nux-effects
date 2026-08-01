@@ -349,7 +349,7 @@ class FactorySlotSourceTests(unittest.TestCase):
         # drive, so the relay hunt must not reuse the LED dwell times.
         self.assertIn("NCR2_INPUT_FLOOR", application)
 
-    def test_hardware_app_exposes_eight_bounded_artist_presets(self):
+    def test_hardware_app_exposes_four_unique_eight_effect_engines(self):
         application = (
             ROOT
             / "firmware"
@@ -370,6 +370,13 @@ class FactorySlotSourceTests(unittest.TestCase):
         ):
             self.assertIn(effect, application)
         self.assertIn("NCR2_EFFECT_COUNT UINT32_C(8)", application)
+        self.assertIn("NCR2_OPEN_EFFECT_COUNT UINT32_C(32)", application)
+        self.assertIn(
+            "if (enabled != UINT32_C(0) ||\n"
+            "            g_effect_ramp != UINT32_C(0))",
+            application,
+        )
+        self.assertIn("static const int16_t cabinet_ir_q15[8][8]", application)
         self.assertIn("quantize_selector(", application)
         self.assertIn("NCR2_SELECTOR_SETTLE_SAMPLES", application)
         self.assertIn("NCR2_SELECTOR_HYSTERESIS", application)

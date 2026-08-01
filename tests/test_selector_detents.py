@@ -3,7 +3,7 @@
 The detent values in the firmware were read off hardware on 2026-07-27 with
 `RECOVERY_COMMAND_READ_KNOBS`. Before that measurement the build quantised
 this channel into eight equal 512-count bins, which silently mapped knob
-positions 2 and 3 onto one effect and left the eighth effect unreachable by
+positions 2 and 3 onto one destination and left the eighth unreachable by
 three ADC counts. These tests pin the real ladder so no future change can
 reintroduce a mapping that the hardware does not actually produce.
 """
@@ -168,21 +168,23 @@ class SelectorDetentTests(unittest.TestCase):
         measured = [int(value) for _, value in self.rows_of("detent")]
         self.assertEqual(tuple(measured), MEASURED)
 
-    def test_every_detent_selects_its_own_effect(self):
-        for index, effect in self.rows_of("quantize"):
+    def test_every_detent_selects_its_own_destination(self):
+        for index, destination in self.rows_of("quantize"):
             self.assertEqual(
-                int(effect),
+                int(destination),
                 int(index),
-                f"detent {index} selects effect {effect}",
+                f"detent {index} selects destination {destination}",
             )
 
-    def test_all_eight_effects_are_reachable_and_distinct(self):
-        selected = {int(effect) for _, effect in self.rows_of("quantize")}
+    def test_all_eight_destinations_are_reachable_and_distinct(self):
+        selected = {
+            int(destination) for _, destination in self.rows_of("quantize")
+        }
         self.assertEqual(
             selected,
             set(range(EFFECT_COUNT)),
             "equal-width bins previously merged two positions and left one "
-            "effect unreachable",
+            "destination unreachable",
         )
 
     def test_any_detent_reaches_any_other(self):
@@ -194,15 +196,15 @@ class SelectorDetentTests(unittest.TestCase):
             )
 
     def test_resting_noise_never_changes_the_selection(self):
-        for index, effect in self.rows_of("noise"):
-            self.assertEqual(int(effect), int(index))
+        for index, destination in self.rows_of("noise"):
+            self.assertEqual(int(destination), int(index))
 
     def test_a_wiper_parked_between_detents_does_not_flip(self):
-        for index, effect in self.rows_of("mid"):
+        for index, destination in self.rows_of("mid"):
             self.assertEqual(
-                int(effect),
+                int(destination),
                 int(index),
-                "hysteresis must hold the current effect at a midpoint",
+                "hysteresis must hold the current destination at a midpoint",
             )
 
     def test_measured_ladder_is_evenly_spaced_and_clear_of_noise(self):

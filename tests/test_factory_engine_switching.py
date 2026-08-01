@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -69,7 +70,7 @@ class FactoryEngineSwitchingTests(unittest.TestCase):
         self.assertIn("isb     sy", source)
         self.assertIn("bx      r1", source)
 
-    def test_open_app_consumes_before_recovery_and_maps_detent_pairs(self):
+    def test_open_app_consumes_before_recovery_and_maps_eight_destinations(self):
         source = (
             ROOT / "firmware" / "hardware_app" / "src" / "main.c"
         ).read_text()
@@ -77,18 +78,55 @@ class FactoryEngineSwitchingTests(unittest.TestCase):
         consume = source.index("ncr2_factory_engine_request_consume(")
         recovery = source.index("arm_recovery_request();", consume)
         self.assertLess(consume, recovery)
-        self.assertIn(
-            "g_hardware_app_effect_index / UINT32_C(2)",
-            source,
-        )
+        self.assertIn("g_hardware_app_selector_position", source)
+        self.assertIn("(uint8_t)selector_position", source)
+        self.assertIn("g_open_engine_effects", source)
+        table_start = source.index("g_open_engine_effects")
+        table_end = source.index("};", table_start)
+        table = source[table_start:table_end]
+        for effect in (
+            "NCR2_EFFECT_SHINE_DRIVE",
+            "NCR2_EFFECT_BREATHE_VIBE",
+            "NCR2_EFFECT_ECHOES_TAPE",
+            "NCR2_EFFECT_GUERRILLA_TREM",
+        ):
+            self.assertIn(effect, table)
         self.assertIn(
             "g_hardware_app_factory_launch_status !=\n"
             "            NCR2_FACTORY_LAUNCH_OK",
             source,
         )
 
+        self.assertIn("[NCR2_OPEN_ENGINE_COUNT][NCR2_EFFECT_COUNT]", table)
+        assignments = re.findall(
+            r"^[ \t]+(NCR2_EFFECT_[A-Z0-9_]+),$",
+            table,
+            re.M,
+        )
+        self.assertEqual(len(assignments), 32)
+        self.assertEqual(len(set(assignments)), 32)
+        self.assertIn(
+            "requested_engine_slot < NCR2_FACTORY_ENGINE_COUNT",
+            source,
+        )
+        self.assertIn(
+            "requested_engine_slot - NCR2_OPEN_ENGINE_FIRST",
+            source,
+        )
+        hold = source.index(
+            "footswitch_event == NCR2_FOOTSWITCH_EVENT_HOLD"
+        )
+        armed = source.index("engine_select_armed = UINT8_C(1)", hold)
+        released = source.index(
+            "debounced_pressed == UINT8_C(0)", armed
+        )
+        reset = source.index("reset_into_engine_slot(engine_slot)", released)
+        self.assertLess(hold, armed)
+        self.assertLess(armed, released)
+        self.assertLess(released, reset)
+
         reset_helper = source[
-            source.index("static void reset_into_factory_engine") :
+            source.index("static void reset_into_engine_slot") :
             source.index("static void enable_hang_watchdog")
         ]
         self.assertLess(
@@ -115,7 +153,7 @@ class FactoryEngineSwitchingTests(unittest.TestCase):
         self.assertIn("0x46414330", checker)
         self.assertIn("forbidden_words", checker)
 
-    def test_factory_monitor_selects_by_knob_or_returns_after_release(self):
+    def test_factory_monitor_maps_one_hold_across_all_eight_positions(self):
         source = (
             ROOT
             / "firmware"
@@ -132,11 +170,33 @@ class FactoryEngineSwitchingTests(unittest.TestCase):
         self.assertNotIn("SRC_GPR8", source)
         self.assertNotIn("SRC_GPR9", source)
         self.assertIn("SELECT_HOLD_LOOPS,      2000", source)
-        self.assertIn("OPEN_HOLD_LOOPS,        5000", source)
-        self.assertIn("TYPE_DELAY_MIN,         2815", source)
-        self.assertIn("TYPE_REVERB_MIN,        1793", source)
-        self.assertIn("TYPE_MOD_MIN,           772", source)
+        self.assertNotIn("OPEN_HOLD_LOOPS", source)
+        expected_thresholds = (3326, 2815, 2304, 1793, 1283, 772, 259)
+        for index, threshold in enumerate(expected_thresholds, start=1):
+            self.assertIn(
+                f"TYPE_SLOT_{index}_MIN,        {threshold}",
+                source,
+            )
         self.assertIn("FACTORY_REQUEST_MAGIC,  0x46414330", source)
+        self.assertNotIn("stage_open", source)
+        thresholds = [
+            int(re.search(
+                rf"\.equ TYPE_SLOT_{index}_MIN,\s+(\d+)", source
+            ).group(1))
+            for index in range(1, 8)
+        ]
+
+        def destination(adc):
+            for index, threshold in enumerate(thresholds):
+                if adc >= threshold:
+                    return index
+            return 7
+
+        measured = (3581, 3071, 2560, 2049, 1538, 1028, 516, 2)
+        self.assertEqual(
+            [destination(adc) for adc in measured],
+            list(range(8)),
+        )
         self.assertIn(
             "ncr2_factory_return_monitor_original_led", source
         )

@@ -75,8 +75,8 @@ the four preserved engine vector pairs:
 | Modulation | `0x600a0000` | `0x20020000` | `0x0000c04d` |
 | Metal | `0x600c0000` | `0x20018000` | `0x0000e4b5` |
 
-A two-second footswitch hold maps adjacent Type detents to those four banks,
-puts the analog path in bypass, and flashes the bank number. The application
+A two-second footswitch hold maps Type positions 1–8 to four factory and four
+open engine slots, puts the analog path in bypass, and flashes the slot number. The application
 then clears its diagnostic recovery token, publishes a one-word request in
 retained SRC GPR10, and warm-resets. On the next application entry the token
 is cleared before it is inspected. Before ITCM is touched, the launcher
@@ -103,25 +103,26 @@ monitor samples active-low GPIO1_IO21 through `GPIO1_PSR`; on every normal
 pass it tail-calls the exact original LED updater with the factory call's LR
 untouched. No vector, timer, interrupt-enable, or audio-DMA state is changed.
 
-Holding for two to five seconds and releasing selects a factory engine using
-the Type knob's live ADC_ETC chain-2 result: positions 1–2 Delay, 3–4 Reverb,
-5–6 Modulation, and 7–8 Metal. Holding for at least five seconds and releasing
-returns to the open bank. The thresholds are the midpoints between the eight
+Holding for two seconds and releasing selects one of all eight engine slots
+using the Type knob's live ADC_ETC chain-2 result. Positions 1–4 request Delay,
+Reverb, Modulation, or Metal. Positions 5–8 request open engines A–D. The open
+application consumes the same three-bit request and retains the selected open
+engine number; after boot, Type returns to selecting its eight effects. The
+thresholds are the midpoints between the eight
 measured physical detents. The monitor uses only SRC GPR7 as a volatile hold
 counter and GPR10 for the same one-shot factory request consumed by the open
 application, leaving the open recovery and trial mailboxes untouched. Waiting
-for release prevents the bootloader from mistaking either gesture for the
+for release prevents the bootloader from mistaking the gesture for the
 power-on Open Recover gesture.
 
 This is still not a resident supervisor: the proprietary DSP remains in
 control between main-loop service calls. It is now a reversible handoff,
 however.
-From the open bank, a Type pair plus a two-second hold launches any factory
-engine. From a factory engine, select the destination with the same Type pairs
-and hold for two to five seconds; a five-second hold returns to the custom
-bank. The stock Type control remains available to the factory engine itself.
-No factory NOR byte is modified. The independent power-on hold still enters
-Open Recover.
+From every engine, Type normally selects one of that engine's eight effects.
+Holding the footswitch turns the current Type position into an engine-slot
+selection: positions 1–4 load factory engines and positions 5–8 load open
+engines. There is no duration-dependent escape gesture. No factory NOR byte
+is modified. The independent power-on hold still enters Open Recover.
 
 ## Dependency audit and corrected metadata location
 

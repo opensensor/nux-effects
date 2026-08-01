@@ -215,6 +215,7 @@ add_executable(
     bootloader/src/recovery_protocol.c
     bootloader/src/recovery_storage.c
     bootloader/src/sha256.c
+    platform/ncr2/src/ncr2_freestanding.c
     platform/ncr2/src/ncr2_nor.c
 )
 target_include_directories(

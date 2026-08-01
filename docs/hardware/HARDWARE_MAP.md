@@ -79,16 +79,16 @@ them a conventional pedal mapping:
 |---|---|
 | Decay | Amount (effect-specific intensity/rate/delay) |
 | Tweak | Character |
-| Type | eight-position effect selector |
+| Type | eight effects normally; eight engine slots during a hold gesture |
 | Level | effect output level |
 
 The source audio application also gives the footswitch two gestures:
 
 - a short press, completed on release, toggles the open effect and analog
   bypass; and
-- a two-second hold launches one preserved factory engine. Type positions
-  1–2 select Delay, 3–4 select Reverb, 5–6 select Modulation, and 7–8 select
-  Metal. The indicator flashes that factory bank number before warm reset.
+- a two-second hold interprets Type positions 1–8 as engine slots. Positions
+  1–4 launch Delay, Reverb, Modulation, or Metal; positions 5–8 load four
+  open engines. Once loaded, all eight positions select that engine's effects.
 
 The launch request occupies only retained SRC GPR10 and is consumed before
 audio initialization. Before replacing ITCM, the launcher validates the
@@ -97,9 +97,10 @@ entry, and its zero-filled 256-byte tail cave. It patches only the ITCM RAM
 copy: one proven main-loop call is redirected through a monitor that samples
 the footswitch and then tail-calls the original stock LED updater. No factory
 interrupt vector is changed. The preserved factory NOR remains byte-identical.
-In a factory engine, choose the destination with the same Type-detent pairs,
-hold for two to five seconds, and release. Hold for at least five seconds and
-release to warm-reset into the open bank.
+In a factory engine, choose any engine slot, hold for two seconds, and release.
+Positions 1–4 warm-reset into the selected factory engine; positions 5–8
+warm-reset into the corresponding open engine. There is no separate long-hold
+threshold.
 The factory Type knob continues to select that stock engine's own modes.
 Holding while applying power remains the independent Open Recover gesture.
 
@@ -173,14 +174,28 @@ Algorithm changes use a roughly 11 ms effect-to-clean-to-effect crossfade;
 selector noise therefore falls back to clean converter audio and can never
 mute the wet route.
 
-The artist-inspired build groups four spacious, sustaining psychedelic
-presets followed by four tight or experimental heavy presets. From low to
-high ADC value they are Shine Drive, Wall Fuzz, Breathe Vibe, Echoes Tape,
-Rage Drive, Cocked Wah, Guerrilla Trem and Whammy Fuzz. These names describe
-the intended playing response rather than copies of a proprietary circuit.
-All eight retain the `+/-0x10000000` internal DSP ceiling. The final DAC
-stage permits `+/-0x20000000`, because the Level control now reaches +6 dB
-instead of stopping at unity.
+The source processor contains 32 unique defaults grouped into four engines:
+Open Amp Studio, Drive + Dynamics, Motion + Pitch, and Echo + Space. Each
+engine owns all eight Type positions. The assignment is a table rather than
+hard-coded selector routing, so editor-generated application images can
+replace any open position without touching factory flash. All algorithms
+retain the `+/-0x10000000` internal DSP ceiling. The final DAC
+stage permits `+/-0x20000000`, because the Level control reaches +6 dB instead
+of stopping at unity.
+
+| Open engine | Type positions 1–8 |
+|---|---|
+| 5 · Open Amp Studio | Glass Clean, Tweed Bloom, Class A Chime, Brit Stack, Brown Lead, Cali Recto, Bass Forge, Acoustic IR |
+| 6 · Drive + Dynamics | Shine Drive, Wall Fuzz, Rage Drive, Cocked Wah, Studio Comp, Octave Fuzz, Bit Crush, Noise Gate |
+| 7 · Motion + Pitch | Breathe Vibe, Guerrilla Trem, Dimension Chorus, Jet Flanger, Phase Orbit, Rotary Cab, Auto Wah, Whammy Fuzz |
+| 8 · Echo + Space | Echoes Tape, Digital Delay, Analog Delay, Reverse Delay, Hall Reverb, Plate Reverb, Shimmer Space, Spring Tank |
+
+Open Amp Studio is a clean-room design, not an extraction or imitation of
+NUX's proprietary TSAC-HD code. Its eight voices combine distinct preamp gain
+structures and pre-emphasis with distinct eight-tap fixed-point cabinet FIRs.
+That deliberately fits this pedal's verified real-time path; loading long
+third-party cabinet IRs remains future engine-pack work. The panel maps Amount
+to preamp gain, Character to amp/cab blend, and Level to final output.
 
 The first source build averaged all four AK4619 input slots and mapped the
 full Level travel to 0..1x. On this mono pedal that made the open bank 12–18

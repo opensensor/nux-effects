@@ -1,3 +1,5 @@
+import { OpenRecoveryDfu } from "/static/open_recovery_dfu.mjs";
+
 /*
  * Open Effect Lab — design and preview NCR-2 effects.
  *
@@ -12,12 +14,62 @@ const DEBOUNCE_MS = 140;
 const FFT_SIZE = 4096;
 const STRING_FREQUENCIES = [82.41, 110.0, 146.83, 196.0, 246.94, 329.63];
 
+const OPEN_ENGINE_LAYOUT = [
+  {
+    name: "Open Amp Studio",
+    effects: [
+      "Glass Clean", "Tweed Bloom", "Class A Chime", "Brit Stack",
+      "Brown Lead", "Cali Recto", "Bass Forge", "Acoustic IR",
+    ],
+  },
+  {
+    name: "Drive + Dynamics",
+    effects: [
+      "Shine Drive", "Wall Fuzz", "Rage Drive", "Cocked Wah",
+      "Studio Comp", "Octave Fuzz", "Bit Crush", "Noise Gate",
+    ],
+  },
+  {
+    name: "Motion + Pitch",
+    effects: [
+      "Breathe Vibe", "Guerrilla Trem", "Dimension Chorus", "Jet Flanger",
+      "Phase Orbit", "Rotary Cab", "Auto Wah", "Whammy Fuzz",
+    ],
+  },
+  {
+    name: "Echo + Space",
+    effects: [
+      "Echoes Tape", "Digital Delay", "Analog Delay", "Reverse Delay",
+      "Hall Reverb", "Plate Reverb", "Shimmer Space", "Spring Tank",
+    ],
+  },
+];
+
+function emptyProgram(engine, position) {
+  return {
+    name: OPEN_ENGINE_LAYOUT[engine].effects[position],
+    programId: ((engine + 5) << 8) | (position + 1),
+    nodes: [],
+    factoryPresetIndex: engine * 8 + position,
+  };
+}
+
+const openEngines = OPEN_ENGINE_LAYOUT.map((layout, engine) => ({
+  slot: engine + 5,
+  name: layout.name,
+  effects: layout.effects.map((_, position) =>
+    emptyProgram(engine, position)),
+}));
+
 const state = {
   session: null,
   sources: [],
   activeSource: 0,
   catalog: [],
-  program: { name: "Untitled", programId: 1, nodes: [] },
+  openEngines,
+  activeOpenEngine: 0,
+  activeEffectPosition: 0,
+  program: openEngines[0].effects[0],
   sampleRate: 48000,
   blockFrames: 64,
   channels: 2,
@@ -35,6 +87,8 @@ const state = {
   playing: false,
   userAudio: null,
   includeHardwareApp: false,
+  dfu: null,
+  dfuInfo: null,
 };
 
 const dom = {};
@@ -86,6 +140,17 @@ async function digestOf(bytes) {
 function setStatus(text, level = "idle") {
   dom.statusText.textContent = text;
   dom.statusDot.dataset.state = level;
+}
+
+function downloadJson(name, value) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
+    type: "application/json",
+  });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1116,6 +1181,7 @@ function addNode(effect) {
     values,
   });
   renderChain();
+  renderEngineBank();
   scheduleRender();
 }
 
@@ -1162,6 +1228,169 @@ function renderChain() {
     });
     dom.chain.append(card);
   });
+}
+
+function renderEngineBank() {
+  document.querySelectorAll("[data-open-engine]").forEach((button) => {
+    const active = Number(button.dataset.openEngine) ===
+      state.activeOpenEngine;
+    button.dataset.active = String(active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  dom.effectPositions.replaceChildren();
+  state.openEngines[state.activeOpenEngine].effects.forEach(
+    (program, position) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "effect-position";
+      button.dataset.active = String(position === state.activeEffectPosition);
+      button.setAttribute(
+        "aria-pressed",
+        String(position === state.activeEffectPosition),
+      );
+      const number = document.createElement("b");
+      number.textContent = String(position + 1);
+      const name = document.createElement("span");
+      name.textContent = program.name;
+      const count = document.createElement("em");
+      count.textContent = `${program.nodes.length} node${
+        program.nodes.length === 1 ? "" : "s"}`;
+      button.append(number, name, count);
+      button.addEventListener("click", () => selectOpenProgram(
+        state.activeOpenEngine,
+        position,
+      ));
+      dom.effectPositions.append(button);
+    },
+  );
+}
+
+function selectOpenProgram(engine, position) {
+  state.activeOpenEngine = engine;
+  state.activeEffectPosition = position;
+  state.program = state.openEngines[engine].effects[position];
+  query("program-name").value = state.program.name;
+  query("program-id").value = formatHex(state.program.programId);
+  renderEngineBank();
+  renderChain();
+  scheduleRender();
+}
+
+function seedHardwarePreset(program) {
+  if (program.nodes.length !== 0) return;
+  program.nodes.push({
+    vendorId: 0x4f50454e,
+    effectId: 0x0b000001 + program.factoryPresetIndex,
+    values: { 1: 2048, 2: 2048, 3: 4095 },
+  });
+}
+
+function removeHardwarePresets() {
+  state.openEngines.forEach((engine) => {
+    engine.effects.forEach((program) => {
+      program.nodes = program.nodes.filter((node) => !(
+        node.vendorId === 0x4f50454e &&
+        node.effectId >= 0x0b000001 &&
+        node.effectId < 0x0b000001 + 32
+      ));
+    });
+  });
+}
+
+function loadFirmwareDefaults() {
+  if (!state.session?.hardware_app?.available) {
+    setStatus("hardware app presets are unavailable in this checkout", "error");
+    return;
+  }
+  state.openEngines.forEach((engine) => {
+    engine.effects.forEach(seedHardwarePreset);
+  });
+  state.includeHardwareApp = true;
+  dom.hardwareApp.checked = true;
+  renderEngineBank();
+  renderChain();
+  setStatus("loading all 32 firmware defaults…", "busy");
+  compileSources();
+}
+
+function exportEngineBank() {
+  downloadJson("ncr2-open-engine-bank.json", {
+    schema: "ncr2-open-engine-bank",
+    version: 1,
+    engine_slots: state.openEngines.map((engine) => ({
+      slot: engine.slot,
+      name: engine.name,
+      effects: engine.effects.map((program, position) => ({
+        position: position + 1,
+        name: program.name,
+        program_id: program.programId,
+        nodes: program.nodes.map((node) => ({
+          vendor_id: node.vendorId,
+          effect_id: node.effectId,
+          parameters: Object.entries(node.values).map(([id, value]) => ({
+            parameter_id: Number(id),
+            value,
+          })),
+        })),
+      })),
+    })),
+    sources: state.sources,
+  });
+  setStatus("exported four open engines with eight effects each", "ok");
+}
+
+function updateDfuReady() {
+  dom.dfuInstall.disabled = !(
+    state.dfu &&
+    state.dfuInfo &&
+    dom.dfuFile.files?.length === 1 &&
+    dom.dfuAck.checked
+  );
+}
+
+async function connectDfu() {
+  if (!dom.dfuAck.checked) {
+    throw new Error("confirm that the pedal is running Open Recover first");
+  }
+  dom.webhidState.textContent = "Connecting…";
+  const dfu = await OpenRecoveryDfu.request();
+  const info = await dfu.getInfo();
+  state.dfu = dfu;
+  state.dfuInfo = info;
+  const slotName = info.confirmedSlot === 0 ? "A" :
+    info.confirmedSlot === 1 ? "B" : "invalid";
+  dom.webhidState.textContent = `Open Recover · confirmed ${slotName}`;
+  dom.dfuDetail.textContent =
+    `Device reports ${Math.round(info.slotSize / 1024)} KiB A/B slots. ` +
+    "The installer will select the inactive slot automatically.";
+  updateDfuReady();
+}
+
+async function installDfu() {
+  const file = dom.dfuFile.files?.[0];
+  if (!file || !state.dfu || !state.dfuInfo || !dom.dfuAck.checked) {
+    throw new Error("connect Open Recover and choose a slot image first");
+  }
+  dom.dfuInstall.disabled = true;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const target = await state.dfu.install(bytes, state.dfuInfo, (
+    phase,
+    complete,
+    total,
+  ) => {
+    dom.dfuProgress.value = total > 0 ? complete / total : 0;
+    dom.dfuDetail.textContent = phase === "write"
+      ? `Writing ${Math.round(complete / 1024)} / ${Math.round(total / 1024)} KiB…`
+      : `${phase[0].toUpperCase()}${phase.slice(1)}…`;
+  });
+  dom.dfuProgress.value = 1;
+  dom.webhidState.textContent = "Rebooting into trial image";
+  dom.dfuDetail.textContent =
+    `Installed to application slot ${target === 0 ? "A" : "B"}; ` +
+    "the bootloader will roll back if the trial does not confirm.";
+  state.dfu.close();
+  state.dfu = null;
+  state.dfuInfo = null;
 }
 
 function parameterControl(node, parameter) {
@@ -1219,6 +1448,7 @@ function moveNode(index, direction) {
 function removeNode(index) {
   state.program.nodes.splice(index, 1);
   renderChain();
+  renderEngineBank();
   scheduleRender();
 }
 
@@ -1416,6 +1646,37 @@ function bind() {
   dom.exportDialog = query("export-dialog");
   dom.exportFiles = query("export-files");
   dom.hardwareApp = query("hardware-app");
+  dom.effectPositions = query("effect-positions");
+  dom.webhidState = query("webhid-state");
+  dom.dfuFile = query("dfu-file");
+  dom.dfuAck = query("dfu-ack");
+  dom.dfuInstall = query("dfu-install");
+  dom.dfuProgress = query("dfu-progress");
+  dom.dfuDetail = query("dfu-detail");
+
+  document.querySelectorAll("[data-open-engine]").forEach((button) => {
+    button.addEventListener("click", () => selectOpenProgram(
+      Number(button.dataset.openEngine),
+      state.activeEffectPosition,
+    ));
+  });
+  query("load-defaults").addEventListener("click", loadFirmwareDefaults);
+  query("export-bank").addEventListener("click", exportEngineBank);
+  query("dfu-connect").addEventListener("click", () => {
+    connectDfu().catch((error) => {
+      dom.webhidState.textContent = "Disconnected";
+      setStatus(error.message, "error");
+    });
+  });
+  dom.dfuFile.addEventListener("change", updateDfuReady);
+  dom.dfuAck.addEventListener("change", updateDfuReady);
+  dom.dfuInstall.addEventListener("click", () => {
+    installDfu().catch((error) => {
+      setStatus(error.message, "error");
+      dom.dfuDetail.textContent = `Install stopped: ${error.message}`;
+      updateDfuReady();
+    });
+  });
 
   query("new-effect").addEventListener("click", () => {
     newEffect().catch((error) => setStatus(error.message, "error"));
@@ -1488,6 +1749,7 @@ function bind() {
 
   query("program-name").addEventListener("input", (event) => {
     state.program.name = event.target.value || "Untitled";
+    renderEngineBank();
   });
   query("program-id").addEventListener("change", (event) => {
     state.program.programId = parseNumber(event.target.value, 1);
@@ -1496,6 +1758,17 @@ function bind() {
 
   dom.hardwareApp.addEventListener("change", () => {
     state.includeHardwareApp = dom.hardwareApp.checked;
+    if (state.includeHardwareApp) {
+      state.openEngines.forEach((engine) => {
+        engine.effects.forEach(seedHardwarePreset);
+      });
+      renderEngineBank();
+      renderChain();
+    } else {
+      removeHardwarePresets();
+      renderEngineBank();
+      renderChain();
+    }
     setStatus(
       state.includeHardwareApp
         ? "extracting the hardware app presets…"
@@ -1536,6 +1809,7 @@ function bind() {
 
 async function start() {
   bind();
+  renderEngineBank();
   renderSourceList();
   updateMetrics(null);
 

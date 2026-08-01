@@ -23,12 +23,15 @@
 
 /* The stock main loop runs once per 48 audio frames, approximately 1 kHz. */
 .equ SELECT_HOLD_LOOPS,      2000
-.equ OPEN_HOLD_LOOPS,        5000
 
-/* Midpoints between the measured pairs of the eight physical detents. */
-.equ TYPE_DELAY_MIN,         2815
-.equ TYPE_REVERB_MIN,        1793
-.equ TYPE_MOD_MIN,           772
+/* Midpoints between the eight measured physical detents. */
+.equ TYPE_SLOT_1_MIN,        3326
+.equ TYPE_SLOT_2_MIN,        2815
+.equ TYPE_SLOT_3_MIN,        2304
+.equ TYPE_SLOT_4_MIN,        1793
+.equ TYPE_SLOT_5_MIN,        1283
+.equ TYPE_SLOT_6_MIN,        772
+.equ TYPE_SLOT_7_MIN,        259
 
 .equ SCB_AIRCR,              0xe000ed0c
 .equ AIRCR_SYSRESETREQ,      0x05fa0004
@@ -61,49 +64,49 @@ released:
     cmp     r1, r2
     blo     clear_counter
 
-    /* Five seconds always returns to Open Effects. */
-    ldr     r0, =SRC_GPR10
-    movw    r2, #OPEN_HOLD_LOOPS
-    cmp     r1, r2
-    bhs     stage_open
-
     /*
-     * A two-to-five-second hold selects a factory engine with the Type knob:
-     * detents 1-2 Delay, 3-4 Reverb, 5-6 Modulation, 7-8 fourth engine.
+     * One hold duration serves all eight engine slots. Detents 1-4 select
+     * the preserved factory engines and detents 5-8 select open engines.
+     * After reset the knob returns to selecting effects inside that engine.
      */
     ldr     r2, =TYPE_ADC_RESULT_3_2
     ldr     r1, [r2]
     ubfx    r1, r1, #0, #12
-    movw    r2, #TYPE_DELAY_MIN
+    movs    r3, #0
+    movw    r2, #TYPE_SLOT_1_MIN
     cmp     r1, r2
-    bhs     select_delay
-    movw    r2, #TYPE_REVERB_MIN
+    bhs     stage_slot
+    movs    r3, #1
+    movw    r2, #TYPE_SLOT_2_MIN
     cmp     r1, r2
-    bhs     select_reverb
-    movw    r2, #TYPE_MOD_MIN
+    bhs     stage_slot
+    movs    r3, #2
+    movw    r2, #TYPE_SLOT_3_MIN
     cmp     r1, r2
-    bhs     select_mod
-    movs    r1, #3
-    b       stage_factory
+    bhs     stage_slot
+    movs    r3, #3
+    movw    r2, #TYPE_SLOT_4_MIN
+    cmp     r1, r2
+    bhs     stage_slot
+    movs    r3, #4
+    movw    r2, #TYPE_SLOT_5_MIN
+    cmp     r1, r2
+    bhs     stage_slot
+    movs    r3, #5
+    movw    r2, #TYPE_SLOT_6_MIN
+    cmp     r1, r2
+    bhs     stage_slot
+    movs    r3, #6
+    movw    r2, #TYPE_SLOT_7_MIN
+    cmp     r1, r2
+    bhs     stage_slot
+    movs    r3, #7
 
-select_delay:
-    movs    r1, #0
-    b       stage_factory
-select_reverb:
-    movs    r1, #1
-    b       stage_factory
-select_mod:
-    movs    r1, #2
-
-stage_factory:
+stage_slot:
+    ldr     r0, =SRC_GPR10
     ldr     r2, =FACTORY_REQUEST_MAGIC
-    orrs    r1, r1, r2
-    str     r1, [r0]
-    b       reset_after_release
-
-stage_open:
-    movs    r1, #0
-    str     r1, [r0]
+    orrs    r3, r3, r2
+    str     r3, [r0]
 
 reset_after_release:
     ldr     r0, =SRC_GPR7

@@ -51,6 +51,51 @@
       </div>
     </header>
 
+    <section class="bank-workspace" aria-labelledby="bank-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="bank-title">Pedal engine slots</h2>
+          <p class="panel-note">
+            Hold the footswitch for 2–3 seconds and use Type to load one
+            engine. After loading, Type selects one of that engine's eight
+            effects.
+          </p>
+        </div>
+        <div class="bank-actions">
+          <button type="button" id="load-defaults" class="primary small">
+            Load firmware defaults
+          </button>
+          <button type="button" id="export-bank" class="ghost small">
+            Export bank JSON
+          </button>
+        </div>
+      </div>
+      <div class="engine-slots" aria-label="Eight engine slots">
+        <div class="engine-slot factory-slot"><b>1</b><span>Factory Delay</span></div>
+        <div class="engine-slot factory-slot"><b>2</b><span>Factory Reverb</span></div>
+        <div class="engine-slot factory-slot"><b>3</b><span>Factory Mod</span></div>
+        <div class="engine-slot factory-slot"><b>4</b><span>Factory Metal</span></div>
+        <button type="button" class="engine-slot open-slot" data-open-engine="0">
+          <b>5</b><span>Open Amp Studio</span>
+        </button>
+        <button type="button" class="engine-slot open-slot" data-open-engine="1">
+          <b>6</b><span>Drive + Dynamics</span>
+        </button>
+        <button type="button" class="engine-slot open-slot" data-open-engine="2">
+          <b>7</b><span>Motion + Pitch</span>
+        </button>
+        <button type="button" class="engine-slot open-slot" data-open-engine="3">
+          <b>8</b><span>Echo + Space</span>
+        </button>
+      </div>
+      <div class="effect-positions" id="effect-positions"
+           aria-label="Effects in selected open engine"></div>
+      <p class="panel-note">
+        The Program panel edits the selected open position immediately.
+        Empty positions are valid passthrough programs.
+      </p>
+    </section>
+
     <main>
       <section class="panel" aria-labelledby="registry-title">
         <div class="panel-head">
@@ -231,6 +276,45 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <section class="dfu-panel" aria-labelledby="dfu-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="dfu-title">Install open engines</h2>
+          <p class="panel-note">
+            Web DFU installs a reviewed <code>.slot</code> application image
+            containing open engines 5–8. It writes only the inactive A/B
+            application slot and preserves the factory engines.
+          </p>
+        </div>
+        <span class="webhid-state" id="webhid-state">Disconnected</span>
+      </div>
+      <div class="dfu-controls">
+        <button type="button" id="dfu-connect" class="ghost">
+          Connect Open Recover
+        </button>
+        <label class="slot-file">
+          <span>Application image</span>
+          <input id="dfu-file" type="file"
+                 accept=".slot,application/octet-stream" />
+        </label>
+        <label class="toggle dfu-ack">
+          <input type="checkbox" id="dfu-ack" />
+          <span>
+            <b>This pedal is running Open Recover</b>
+            <em>The development USB identity is shared with the stock updater.</em>
+          </span>
+        </label>
+        <button type="button" id="dfu-install" class="primary" disabled>
+          Install to inactive slot
+        </button>
+      </div>
+      <progress id="dfu-progress" max="1" value="0"></progress>
+      <p class="panel-note" id="dfu-detail">
+        Enter Open Recover, connect it here, choose a built slot image, then
+        install. Do not remove USB power during erase or write.
+      </p>
     </section>
 
     <dialog id="export-dialog">

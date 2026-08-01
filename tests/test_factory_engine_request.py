@@ -29,7 +29,7 @@ int main(void)
     if (engine != UINT8_C(0) || mailbox.token != UINT32_C(0)) return 2;
 
     for (uint8_t candidate = UINT8_C(0);
-         candidate < NCR2_FACTORY_ENGINE_COUNT;
+         candidate < NCR2_ENGINE_SLOT_COUNT;
          ++candidate) {
         if (ncr2_factory_engine_request_arm(&mailbox, candidate) !=
             NCR2_FACTORY_REQUEST_OK) return 3;
@@ -49,7 +49,7 @@ int main(void)
 
     mailbox.token = UINT32_C(0x12345678);
     if (ncr2_factory_engine_request_arm(
-            &mailbox, NCR2_FACTORY_ENGINE_COUNT) !=
+            &mailbox, NCR2_ENGINE_SLOT_COUNT) !=
         NCR2_FACTORY_REQUEST_INVALID_ARGUMENT) return 10;
     if (mailbox.token != UINT32_C(0)) return 11;
     return 0;

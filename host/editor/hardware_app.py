@@ -1,6 +1,6 @@
 """Preview the hardware application's fixed-point presets in the editor.
 
-`firmware/hardware_app/src/main.c` implements its eight panel presets as
+`firmware/hardware_app/src/main.c` implements 32 panel presets as
 per-sample fixed-point code with file-scope state, not as
 `effect_descriptor_t` effects. It cannot be registered directly, and it
 cannot be compiled on the host either: the same file initializes SAI,
@@ -43,25 +43,73 @@ SAMPLE_RATE_HZ = 48000
 KNOB_ADC_MAX = 4095
 
 PRESET_ENUM_NAMES = (
+    "NCR2_EFFECT_AMP_GLASS_CLEAN",
+    "NCR2_EFFECT_AMP_TWEED_BLOOM",
+    "NCR2_EFFECT_AMP_CLASS_A_CHIME",
+    "NCR2_EFFECT_AMP_BRIT_STACK",
+    "NCR2_EFFECT_AMP_BROWN_LEAD",
+    "NCR2_EFFECT_AMP_CALI_RECTO",
+    "NCR2_EFFECT_AMP_BASS_FORGE",
+    "NCR2_EFFECT_AMP_ACOUSTIC_IR",
     "NCR2_EFFECT_SHINE_DRIVE",
     "NCR2_EFFECT_WALL_FUZZ",
-    "NCR2_EFFECT_BREATHE_VIBE",
-    "NCR2_EFFECT_ECHOES_TAPE",
     "NCR2_EFFECT_RAGE_DRIVE",
     "NCR2_EFFECT_COCKED_WAH",
+    "NCR2_EFFECT_STUDIO_COMP",
+    "NCR2_EFFECT_OCTAVE_FUZZ",
+    "NCR2_EFFECT_BIT_CRUSH",
+    "NCR2_EFFECT_NOISE_GATE",
+    "NCR2_EFFECT_BREATHE_VIBE",
     "NCR2_EFFECT_GUERRILLA_TREM",
+    "NCR2_EFFECT_DIMENSION_CHORUS",
+    "NCR2_EFFECT_JET_FLANGER",
+    "NCR2_EFFECT_PHASE_ORBIT",
+    "NCR2_EFFECT_ROTARY_CAB",
+    "NCR2_EFFECT_AUTO_WAH",
     "NCR2_EFFECT_WHAMMY_FUZZ",
+    "NCR2_EFFECT_ECHOES_TAPE",
+    "NCR2_EFFECT_DIGITAL_DELAY",
+    "NCR2_EFFECT_ANALOG_DELAY",
+    "NCR2_EFFECT_REVERSE_DELAY",
+    "NCR2_EFFECT_HALL_REVERB",
+    "NCR2_EFFECT_PLATE_REVERB",
+    "NCR2_EFFECT_SHIMMER_SPACE",
+    "NCR2_EFFECT_SPRING_TANK",
 )
 
 PRESET_NAMES = (
+    "Amp · Glass Clean",
+    "Amp · Tweed Bloom",
+    "Amp · Class A Chime",
+    "Amp · Brit Stack",
+    "Amp · Brown Lead",
+    "Amp · Cali Recto",
+    "Amp · Bass Forge",
+    "Amp · Acoustic IR",
     "Shine Drive",
     "Wall Fuzz",
-    "Breathe Vibe",
-    "Echoes Tape",
     "Rage Drive",
     "Cocked Wah",
+    "Studio Comp",
+    "Octave Fuzz",
+    "Bit Crush",
+    "Noise Gate",
+    "Breathe Vibe",
     "Guerrilla Trem",
+    "Dimension Chorus",
+    "Jet Flanger",
+    "Phase Orbit",
+    "Rotary Cab",
+    "Auto Wah",
     "Whammy Fuzz",
+    "Echoes Tape",
+    "Digital Delay",
+    "Analog Delay",
+    "Reverse Delay",
+    "Hall Reverb",
+    "Plate Reverb",
+    "Shimmer Space",
+    "Spring Tank",
 )
 
 # The DSP region, in the order the generated unit needs them.
@@ -75,6 +123,7 @@ REQUIRED_FUNCTIONS = (
     "lowpass_sample",
     "blend_samples_q15",
     "shape_drive",
+    "process_amp_voice",
     "reset_transient_effect_state",
     "initialize_effect_processor",
     "update_effect_selection",
