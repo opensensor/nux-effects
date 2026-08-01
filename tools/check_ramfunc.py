@@ -18,9 +18,15 @@ REQUIRED_SYMBOLS = {
     "FLEXSPI_UpdateLUT",
     "ram_erase_sector",
     "ram_program_page",
+    "ram_rom_initialize",
+    "ram_rom_program_page_call",
     "ram_software_reset",
     "ram_transfer",
     "ram_wait_until_flash_idle",
+}
+ROM_INDIRECT_CALLERS = {
+    "ram_rom_initialize",
+    "ram_rom_program_page_call",
 }
 
 
@@ -75,6 +81,22 @@ def symbol_addresses(nm: str, elf: Path) -> dict[str, int]:
     return symbols
 
 
+def requirement_matches(
+    symbols: dict[str, int], requirement: str
+) -> list[tuple[str, int]]:
+    return [
+        (name, address)
+        for name, address in symbols.items()
+        if name == requirement or name.startswith(requirement + ".")
+    ]
+
+
+def canonical_function(name: str | None) -> str | None:
+    if name is None:
+        return None
+    return name.split(".", 1)[0]
+
+
 def check_direct_calls(
     objdump: str,
     elf: Path,
@@ -84,7 +106,12 @@ def check_direct_calls(
     output = run(
         [objdump, "-d", "--section=.ramfunc", str(elf)]
     )
+    current_function: str | None = None
+    rom_callers_seen: set[str] = set()
     for line in output.splitlines():
+        label = re.search(r"<([^>]+)>:$", line)
+        if label is not None:
+            current_function = label.group(1)
         match = re.search(
             r"\bblx?\s+([0-9a-fA-F]+)(?:\s|$)",
             line,
@@ -97,10 +124,19 @@ def check_direct_calls(
                     f"{line.strip()}"
                 )
         elif re.search(r"\bblx?\s+r(?:1[0-5]|[0-9])\b", line):
-            raise CheckError(
-                "RAM function contains an unchecked indirect call: "
-                f"{line.strip()}"
-            )
+            caller = canonical_function(current_function)
+            if caller not in ROM_INDIRECT_CALLERS:
+                raise CheckError(
+                    "RAM function contains an unchecked indirect call: "
+                    f"{line.strip()}"
+                )
+            rom_callers_seen.add(caller)
+    missing_rom_calls = ROM_INDIRECT_CALLERS - rom_callers_seen
+    if missing_rom_calls:
+        raise CheckError(
+            "expected checked boot-ROM calls are missing from: "
+            + ", ".join(sorted(missing_rom_calls))
+        )
 
 
 def main() -> int:
@@ -124,18 +160,25 @@ def main() -> int:
             args.objdump, elf
         )
         symbols = symbol_addresses(args.nm, elf)
-        missing = REQUIRED_SYMBOLS - symbols.keys()
+        missing = {
+            name
+            for name in REQUIRED_SYMBOLS
+            if not requirement_matches(symbols, name)
+        }
         if missing:
             raise CheckError(
                 "required RAM symbols are missing: "
                 + ", ".join(sorted(missing))
             )
         for name in sorted(REQUIRED_SYMBOLS):
-            address = symbols[name]
-            if not section_start <= address < section_end:
-                raise CheckError(
-                    f"{name} is outside .ramfunc at 0x{address:08x}"
-                )
+            for resolved_name, address in requirement_matches(
+                symbols, name
+            ):
+                if not section_start <= address < section_end:
+                    raise CheckError(
+                        f"{resolved_name} is outside .ramfunc at "
+                        f"0x{address:08x}"
+                    )
         check_direct_calls(
             args.objdump,
             elf,

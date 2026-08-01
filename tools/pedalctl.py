@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import errno
 import hashlib
 import json
 import os
@@ -113,6 +114,14 @@ STATUSES = {
 
 class RecoveryError(RuntimeError):
     """The host input, transport, or recovery response is invalid."""
+
+
+class RecoveryTransportError(RecoveryError):
+    """A report exchange failed at the operating-system transport layer."""
+
+    def __init__(self, error: OSError):
+        super().__init__(str(error))
+        self.errno = error.errno
 
 
 @dataclasses.dataclass(frozen=True)
@@ -430,8 +439,11 @@ class RecoveryClient:
         for _attempt in range(self.retries + 1):
             try:
                 response = Packet.decode(self.transport.exchange(encoded))
-            except (OSError, RecoveryError) as error:
-                last_error = RecoveryError(str(error))
+            except OSError as error:
+                last_error = RecoveryTransportError(error)
+                continue
+            except RecoveryError as error:
+                last_error = error
                 continue
             if response.command != request.command:
                 raise RecoveryError(
@@ -627,8 +639,26 @@ class RecoveryClient:
     def set_pending(self) -> None:
         self._session_command("set-pending")
 
-    def reboot(self) -> None:
-        self._session_command("reboot")
+    def reboot(self) -> bool:
+        try:
+            self._session_command("reboot")
+        except RecoveryTransportError as error:
+            #
+            # The RT1051 resets synchronously from the REBOOT handler. On
+            # Linux the hidraw node can disappear after accepting the OUT
+            # report but before returning the IN acknowledgement. SET_PENDING
+            # or FINALIZE_FULL_FLASH has already succeeded at this point, so
+            # that specific USB disconnect is the expected reboot outcome.
+            #
+            if error.errno in {
+                errno.ENODEV,
+                errno.EIO,
+                errno.ENXIO,
+                errno.ESHUTDOWN,
+            }:
+                return False
+            raise
+        return True
 
 
 def validate_slot_image(path: Path) -> tuple[bytes, open_image.Manifest]:
@@ -939,6 +969,7 @@ def parse_slot(value: str) -> int | None:
 
 def command_upload(args: argparse.Namespace) -> None:
     image, manifest = validate_slot_image(args.image)
+    reboot_acknowledged: bool | None = None
     with recovery_transport(args) as transport:
         client = RecoveryClient(transport, args.retries)
         info = client.get_info()
@@ -972,7 +1003,7 @@ def command_upload(args: argparse.Namespace) -> None:
         client.finalize()
         client.set_pending()
         if not args.no_reboot:
-            client.reboot()
+            reboot_acknowledged = client.reboot()
 
     print(
         json.dumps(
@@ -982,6 +1013,7 @@ def command_upload(args: argparse.Namespace) -> None:
                 "slot_image_sha256": hashlib.sha256(image).hexdigest(),
                 "payload_sha256": manifest.image_sha256.hex(),
                 "reboot_requested": not args.no_reboot,
+                "reboot_acknowledged": reboot_acknowledged,
             },
             indent=2,
             sort_keys=True,
@@ -1035,6 +1067,7 @@ def command_restore_full(args: argparse.Namespace) -> None:
     )
     image = args.image.read_bytes()
     digest = bytes.fromhex(image_sha256)
+    reboot_acknowledged: bool | None = None
 
     with recovery_transport(args) as transport:
         client = RecoveryClient(transport, args.retries)
@@ -1091,7 +1124,7 @@ def command_restore_full(args: argparse.Namespace) -> None:
         )
         client.finalize_full_flash()
         if not args.no_reboot:
-            client.reboot()
+            reboot_acknowledged = client.reboot()
 
     print(
         json.dumps(
@@ -1100,6 +1133,7 @@ def command_restore_full(args: argparse.Namespace) -> None:
                 "image": str(args.image),
                 "image_sha256": image_sha256,
                 "reboot_requested": not args.no_reboot,
+                "reboot_acknowledged": reboot_acknowledged,
             },
             indent=2,
             sort_keys=True,

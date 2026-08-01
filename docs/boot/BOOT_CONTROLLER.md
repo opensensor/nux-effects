@@ -42,13 +42,13 @@ gates, it can call:
 ```c
 #include "ncr2_boot_request.h"
 
-if (ncr2_boot_confirm_healthy() == 0) {
-    /* Request the board's validated warm-reset path. */
-}
+(void)ncr2_boot_confirm_healthy_and_reset();
 ```
 
-This atomically changes the retained token from `handoff` to `confirmation`;
-it does not write flash. On the next warm reset, the bootloader accepts it
+This atomically changes the retained token from `handoff` to `confirmation`
+and immediately requests the required warm reset. On an ordinary confirmed
+boot it returns `BOOT_TRIAL_NO_HANDOFF` and does not reset. On the trial reset,
+the bootloader accepts the confirmation
 only if both the slot and journal sequence still match the pending record.
 The bootloader—not the application—then appends the durable confirmed state.
 Stale, replayed, partial, and mismatched tokens are cleared without
@@ -98,8 +98,9 @@ default; USB enumeration and physical NOR mutation require independent build
 switches. The board adapter configures only the two recovered early-boot
 input pads, USB1 clocks/PHY/IRQ, WDOG1, and warm reset.
 
-Passing the post-link hardware checks proves composition, vectors, memory
-placement, and protected-range policy only. Pending-trial persistence and
-USB recovery become hardware-approved only after the documented target gates
-pass. Until then, the default controller recovery decision stops in the
-bootloader diagnostic loop.
+Post-link checks prove composition, vectors, memory placement, and
+protected-range policy. Physical tests on 2026-08-01 additionally proved open
+USB recovery, journaled A-to-B and B-to-A pending updates, the watchdog handoff
+token, application confirmation, warm reset, and durable confirmation with no
+pending record left behind. The default/offline build remains disconnected
+and read-only; only the explicitly gated hardware build exposes these paths.

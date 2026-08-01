@@ -50,6 +50,8 @@ enum ncr2_nor_backend_status {
     NCR2_NOR_BACKEND_PROGRAM_TRANSFER = -13,
     NCR2_NOR_BACKEND_CONTROLLER_TIMEOUT = -14,
     NCR2_NOR_BACKEND_BUSY_TIMEOUT = -15,
+    NCR2_NOR_BACKEND_ROM_API_INVALID = -16,
+    NCR2_NOR_BACKEND_ROM_INIT_FAILED = -17,
 };
 
 typedef struct __attribute__((packed)) ncr2_nor_diagnostics {

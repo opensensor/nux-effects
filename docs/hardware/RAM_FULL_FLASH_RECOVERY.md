@@ -24,8 +24,10 @@ The full recovery image therefore links as follows:
 | flash being replaced | FlexSPI XIP `0x60000000–0x607fffff` |
 
 It preserves the open bootloader's clock and SEMC setup, explicitly installs
-its own VTOR, initializes a full-range NOR policy, and enumerates the same
-open HID protocol. `tools/check_ram_recovery.py` fails the build if any
+its own VTOR, initializes a full-range NOR policy, loads the real two-sector
+boot journal, and enumerates the same open HID protocol. It therefore handles
+ordinary inactive-slot A/B updates as well as explicitly unlocked whole-chip
+restore. `tools/check_ram_recovery.py` fails the build if any
 loadable segment or required symbol is outside SDRAM/DTCM, if any direct
 branch targets XIP, or if the vector table is invalid.
 
@@ -92,3 +94,11 @@ serial downloader or require the board's boot-mode strap. Restore it with
 Normal application releases should continue to use A/B updates. Full restore
 exists for bootloader development and recovery while the open boot chain is
 still being stabilized.
+
+## Physical A/B result
+
+On 2026-08-01 this RAM personality loaded the installed sequence-1 journal,
+uploaded and activated inactive slot B, then uploaded and activated inactive
+slot A. After each pending application confirmed and reset, a new recovery
+session reported the target slot as confirmed and `pending_slot` as none.
+Whole-chip Open Recover restore remains independently gated and disabled.

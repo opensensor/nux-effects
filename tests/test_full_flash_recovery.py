@@ -368,6 +368,11 @@ int main(void)
         self.assertNotIn("0x60002000", linker)
         self.assertIn("ncr2_flexspi_nor_init_full_flash", source)
         self.assertIn("recovery_engine_enable_full_flash", source)
+        self.assertIn("recovery_storage_make_journal_backend", source)
+        self.assertIn("boot_journal_load(", source)
+        self.assertIn("NCR2_BOOT_METADATA_OFFSET", source)
+        self.assertIn("boot_state_selected_slot", source)
+        self.assertNotIn("unusable_store_boot_state", source)
         checker = (
             ROOT / "tools" / "check_hardware_bootloader.py"
         ).read_text()

@@ -92,25 +92,24 @@ class UsbRecoverySafetyTests(unittest.TestCase):
         )
 
         self.assertIn("NCR2_LUT_SEQUENCE_READ_DATA 10U", source)
-        # Physical writes corrupted the first byte of alternating FIFO
-        # fills. A complete 32-byte recovery payload must fit in one
-        # watermark so TFDR[0] is not reused during the command.
+        # The custom IP TX FIFO implementation failed physical readback.
+        # Programming now delegates a full staged page to the immutable
+        # RT1051 boot-ROM driver, with IP commands explicitly at 30 MHz.
         self.assertIn(
-            "NCR2_FLEXSPI_TX_WATERMARK UINT32_C(3)",
+            '#include "fsl_romapi.h"',
             source,
         )
         self.assertIn(
-            "NCR2_FLEXSPI_SAFE_PROGRAM_BYTES "
-            "NCR2_FLEXSPI_TX_FIFO_BYTES",
+            "NCR2_BOOTLOADER_TREE_POINTER UINT32_C(0x0020001C)",
             source,
         )
         self.assertIn(
-            "FLEXSPI_IPTXFCR_TXWMRK(\n"
-            "                NCR2_FLEXSPI_TX_WATERMARK)",
+            "config->ipcmdSerialClkFreq = kFLEXSPISerialClk_30MHz",
             source,
         )
-        self.assertIn("FLEXSPI_INTR_IPTXWE_MASK |", source)
-        self.assertIn("status = ram_program_page(", source)
+        self.assertIn("ram_rom_program_page_call(", source)
+        self.assertIn("aligned_bytes[index] = UINT8_C(0xFF)", source)
+        self.assertNotIn("FLEXSPI->TFDR[", source)
         # ISEQID is four bits and the LUT is 64 words; both limits are
         # enforced at compile time after a sequence index of 16 silently
         # aliased to sequence 0 on hardware.

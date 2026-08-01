@@ -182,6 +182,13 @@ The bootloader then records each trial before executing the pending slot.
 The application must explicitly confirm itself after a healthy audio/control
 startup. Exhausted trials roll back to the last confirmed slot.
 
+`REBOOT` may reset the RT1051 after it accepts the HID OUT report but before
+the final HID IN acknowledgement reaches Linux. After `SET_PENDING` (or a
+verified full-flash finalization) has succeeded, `pedalctl` treats only an
+operating-system device-disconnect error at `REBOOT` as an expected
+unacknowledged reset and reports `reboot_acknowledged: false`. Errors or lost
+acknowledgements at every earlier stage remain fatal.
+
 Confirmation is not an application-side flash write. The bootloader publishes
 the pending slot and exact metadata sequence in retained SRC GPR3–GPR6. Once
 healthy, the application converts that handoff token to a confirmation token
@@ -204,6 +211,14 @@ into the FlexSPI XIP window, and the bootloader checker verifies that the
 embedded bytes equal the independently checked RAM binary. Only this image
 calls `ncr2_flexspi_nor_init_full_flash()` and
 `recovery_engine_enable_full_flash()`.
+
+The RAM personality also loads the durable A/B boot journal and permits
+ordinary bounded slot uploads. Full-flash mode widens the low-level address
+policy, not the slot transaction policy: inactive-slot updates still protect
+the confirmed and selected slots, validate the manifest, and append
+`SET_PENDING` through the journal backend. A whole-flash transaction has no
+`SET_PENDING` step because the supplied 8 MiB image replaces the journal
+itself.
 
 The XIP bootloader compiles the command numbers so it can return
 `FULL_FLASH_DISABLED`, but it neither advertises the capability nor widens
@@ -249,8 +264,9 @@ Pending images receive exactly three recorded attempts. The trial counter is
 durably appended before each jump. A fourth reset without confirmation
 appends a rollback record and selects the last confirmed image. The
 host-tested handoff layer can arm the opt-in RT1051 WDOG1 adapter for an
-eight-second trial. Hardware wiring of these already-tested policies waits
-on the RAM-resident FlexSPI backend and target watchdog gate.
+eight-second trial. Physical A-to-B and B-to-A tests on 2026-08-01 exercised
+the RAM-resident journal backend, retained confirmation handoff, warm reset,
+and durable commit on the Verb Core Deluxe.
 
 ## Host tooling
 
@@ -279,8 +295,7 @@ python3 tools/pedalctl.py knobs --watch
 python3 tools/pedalctl.py calibrate-selector
 ```
 
-Hand control to the immutable NXP ROM so a new bootloader can be installed
-while the open NOR programmer remains unsafe:
+Hand control to the immutable NXP ROM so a new bootloader can be installed:
 
 ```sh
 python3 tools/pedalctl.py handoff-to-rom IMAGE \
@@ -289,11 +304,11 @@ python3 tools/pedalctl.py handoff-to-rom IMAGE \
 
 This validates the follow-up image before mutating anything, then erases
 exactly the first 64 KiB — the boot header the ROM checks — and stops. Erase
-is the one part of this backend that is physically trustworthy, so the
-bounded erase is safe even though `WRITE_CHUNK` is not. Everything above the
-header, including both slots and the factory compatibility region, is
-untouched. See [ROM_SDP_RECOVERY.md](../hardware/ROM_SDP_RECOVERY.md) for the
-cold start and flash that follow.
+and bounded A/B programming are physically validated, but Open Recover still
+refuses whole-chip programming. Everything above the header, including both
+slots and the factory compatibility region, is untouched. See
+[ROM_SDP_RECOVERY.md](../hardware/ROM_SDP_RECOVERY.md) for the cold start and
+flash that follow.
 
 `calibrate-selector` prompts through all eight positions, reports the
 adjacent gaps against the worst resting noise it saw, warns when two detents

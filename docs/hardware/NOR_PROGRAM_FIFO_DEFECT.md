@@ -1,7 +1,10 @@
 # Known defect: FlexSPI IP page program corrupts alternating FIFO fills
 
-Status: the second candidate and conservative small host transactions failed
-physical validation. Open full-chip restore is fail-closed before erase.
+Status: the custom FlexSPI page-program path is rejected. Its boot-ROM-backed
+replacement passed a destructive 8 KiB inactive-slot erase/program/readback/
+restore test on physical hardware on 2026-07-31. Bounded A/B slot programming
+is approved; open full-chip restore remains fail-closed before erase pending a
+separate complete-image test.
 Discovered 2026-07-24 on physical hardware, once the FlexSPI port-size fix
 made slot writes reachable for the first time.
 
@@ -97,7 +100,7 @@ across the separate eight-byte commands.
 
 ## Failed second candidate
 
-Option 3 is now implemented. The driver sets `IPTXFCR[TXWMRK]` to three, so
+Option 3 was implemented. The driver set `IPTXFCR[TXWMRK]` to three, so
 one watermark represents 32 bytes, clears any pending TX/RX watermark flags,
 and limits each page-program command to that same 32-byte size.
 `ram_transfer` therefore loads `TFDR[0..7]` once and never reuses a FIFO word
@@ -128,6 +131,79 @@ that capability, so `pedalctl restore-full` refuses before beginning a
 session or erasing any flash. The NXP ROM flashloader remains the physically
 verified full-image recovery path. Normal A/B upload is also unapproved until
 the backend itself is corrected and validated on hardware.
+
+## Third candidate: immutable boot-ROM program API
+
+The RT1051's NXP-supplied ROM API exports FlexSPI NOR initialization and
+page-program operations through the bootloader API tree at `0x0020001c`.
+The open backend now validates that tree and its function pointers against
+the RT1051 boot-ROM address window, initializes a conservative standard-SPI
+configuration, and delegates page programming to the ROM implementation.
+
+The candidate deliberately uses 30 MHz for both the serial read clock and
+`ipcmdSerialClkFreq`. A complete 256-byte page buffer is staged in DTCM with
+`0xff` outside the requested subrange, so the ROM API always receives the
+page-aligned, full-sized input its contract describes. The defective custom
+TFDR write loop and its page-program LUT are no longer reachable.
+
+### Physical result, 2026-07-31
+
+The replacement was installed on the Verb Core Deluxe through the immutable
+NXP downloader and RAM flashloader. The 8 MiB installation read back with the
+exact packed-image SHA-256:
+
+```
+748158a8b2ad87c1181d65967b62d09e260741b162f3524cb5b416915b413cfa
+```
+
+Open recovery then erased the first 8 KiB of inactive slot B and confirmed it
+was all `0xff`. It programmed and immediately verified a deterministic 8 KiB
+pattern whose SHA-256 was:
+
+```
+86109a8483423449ecad77bbd9682b97c542272da06962ec283bd829be197042
+```
+
+Bytes 8 and 24 of every 32-byte host packet were deliberately zero, repeating
+the old corruption signature 256 times. A separate host read of all 8 KiB
+matched the pattern and SHA exactly. Finally, both sectors were erased again
+and a host read confirmed all 8 KiB had returned to `0xff`.
+
+That result approves the ROM backend for bounded inactive-slot updates. It
+does not prove an uninterrupted 8 MiB open-recovery restore, so the firmware
+still does not advertise `RECOVERY_CAPABILITY_VERIFIED_FULL_PROGRAM` and the
+host continues to reject `restore-full` before starting a session or erasing
+flash.
+
+### End-to-end A/B result, 2026-08-01
+
+The first real slot upload exposed an independent integration guard: the
+embedded RAM personality had originally been written only for whole-chip
+rescue and intentionally replaced `store_boot_state` with a rejecting stub.
+The slot bytes erased, programmed, and finalized correctly, but `SET_PENDING`
+failed without touching the journal. RAM recovery now loads the real
+two-sector journal, protects its confirmed and selected slots, and uses the
+normal verified journal backend for bounded updates.
+
+After installing that correction through the immutable NXP path, full-image
+readback matched:
+
+```
+83137ec184bb5861c7a55cc379d48abfb6dddd0135cdea3123d98400b06a0371
+```
+
+An Open Recover upload then moved confirmed state from A to B. The pending
+application validated its program library and selector, armed the retained
+confirmation token, warm-reset, and returned to recovery after the bootloader
+committed B. Recovery reported B confirmed and no pending slot. A second
+versioned upload repeated the complete sequence from B back to A and reported
+A confirmed with no pending slot.
+
+The RT1051 resets synchronously while handling `REBOOT`, so Linux can remove
+the hidraw node before receiving the final IN report. `pedalctl` now treats
+only expected device-disconnect errors at that final command as a successful
+unacknowledged reboot and reports `reboot_acknowledged: false`. All earlier
+update stages must still return successful acknowledgements.
 
 ## Reproducing
 

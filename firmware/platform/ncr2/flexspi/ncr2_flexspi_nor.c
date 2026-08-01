@@ -5,6 +5,7 @@
 
 #include "MIMXRT1051.h"
 #include "fsl_flexspi.h"
+#include "fsl_romapi.h"
 #include "ncr2_flash_layout.h"
 
 #define NCR2_RAMFUNC \
@@ -14,7 +15,6 @@
 #define NCR2_LUT_SEQUENCE_WRITE_ENABLE 12U
 #define NCR2_LUT_SEQUENCE_READ_STATUS 13U
 #define NCR2_LUT_SEQUENCE_ERASE_SECTOR 14U
-#define NCR2_LUT_SEQUENCE_PAGE_PROGRAM 15U
 /*
  * The FlexSPI LUT is 64 words: sixteen four-word sequences, and IPCR1
  * ISEQID is only four bits wide. Sequence 10 sits just below the block
@@ -23,7 +23,7 @@
  */
 #define NCR2_LUT_SEQUENCE_READ_DATA 10U
 #define NCR2_LUT_FIRST_WORD (4U * NCR2_LUT_SEQUENCE_READ_ID)
-#define NCR2_LUT_WORD_COUNT 20U
+#define NCR2_LUT_WORD_COUNT 16U
 /* FLSHCR0[FLSHSZ] is a 23-bit KiB count; index 0 is port A1. */
 #define NCR2_FLASH_SIZE_KIB (NCR2_FLASH_SIZE / UINT32_C(1024))
 #define NCR2_FLSHCR0_SIZE_LIMIT_KIB UINT32_C(0x007FFFFF)
@@ -58,22 +58,257 @@ _Static_assert(
 #define NCR2_FLEXSPI_RESET_POLL_LIMIT UINT32_C(200000)
 #define NCR2_FLASH_BUSY_POLL_LIMIT UINT32_C(200000)
 #define NCR2_FLASH_STATUS_ERROR_LIMIT UINT32_C(3)
-#define NCR2_FLEXSPI_TX_WATERMARK UINT32_C(3)
-#define NCR2_FLEXSPI_TX_FIFO_BYTES \
-    (UINT32_C(8) * (NCR2_FLEXSPI_TX_WATERMARK + UINT32_C(1)))
 #define NCR2_FLEXSPI_ERROR_MASK \
     (FLEXSPI_INTR_AHBCMDERR_MASK | \
      FLEXSPI_INTR_IPCMDERR_MASK | \
      FLEXSPI_INTR_AHBCMDGE_MASK | \
      FLEXSPI_INTR_IPCMDGE_MASK)
-#define NCR2_FLEXSPI_SAFE_PROGRAM_BYTES NCR2_FLEXSPI_TX_FIFO_BYTES
+#define NCR2_BOOT_ROM_START UINT32_C(0x00200000)
+#define NCR2_BOOT_ROM_END UINT32_C(0x00220000)
+#define NCR2_BOOTLOADER_TREE_POINTER UINT32_C(0x0020001C)
+#define NCR2_FLEXSPI_INSTANCE UINT32_C(0)
+
+/*
+ * These first fields intentionally mirror the private interface layout in
+ * NXP's RT1051 fsl_romapi.c. Calling through the ROM tree avoids linking a
+ * wrapper from XIP while the same NOR is unavailable.
+ */
+
+typedef struct ncr2_rom_flexspi_driver {
+    uint32_t version;
+    status_t (*init)(uint32_t instance,
+                     flexspi_nor_config_t *config);
+    status_t (*program)(uint32_t instance,
+                        flexspi_nor_config_t *config,
+                        uint32_t destination,
+                        const uint32_t *source);
+    status_t (*erase_all)(uint32_t instance,
+                          flexspi_nor_config_t *config);
+    status_t (*erase)(uint32_t instance,
+                      flexspi_nor_config_t *config,
+                      uint32_t start,
+                      uint32_t length);
+    uint32_t reserved1;
+    void (*clear_cache)(uint32_t instance);
+    status_t (*transfer)(uint32_t instance,
+                         flexspi_xfer_t *transfer);
+    status_t (*update_lut)(uint32_t instance,
+                           uint32_t sequence_index,
+                           const uint32_t *lut,
+                           uint32_t sequence_count);
+    uint32_t reserved2;
+} ncr2_rom_flexspi_driver_t;
+
+typedef struct ncr2_bootloader_api_entry {
+    void (*run_bootloader)(void *argument);
+    uint32_t version;
+    const uint8_t *copyright;
+    uint32_t reserved0;
+    const ncr2_rom_flexspi_driver_t *flexspi_nor_driver;
+} ncr2_bootloader_api_entry_t;
+
+_Static_assert(
+    offsetof(ncr2_rom_flexspi_driver_t, init) == UINT32_C(4),
+    "RT1051 ROM FlexSPI init pointer moved");
+_Static_assert(
+    offsetof(ncr2_rom_flexspi_driver_t, program) == UINT32_C(8),
+    "RT1051 ROM FlexSPI program pointer moved");
+_Static_assert(
+    offsetof(ncr2_bootloader_api_entry_t, flexspi_nor_driver) ==
+        UINT32_C(16),
+    "RT1051 bootloader API tree layout changed");
+_Static_assert(
+    sizeof(flexspi_nor_config_t) == UINT32_C(512),
+    "RT1051 ROM FlexSPI configuration must remain 512 bytes");
 
 typedef struct ncr2_flexspi_context {
     uint8_t initialized;
     uint8_t full_flash_mutation;
+    flexspi_nor_config_t rom_config;
 } ncr2_flexspi_context_t;
 
 static ncr2_flexspi_context_t g_context;
+
+static NCR2_RAMFUNC int ram_rom_range_is_valid(
+    uintptr_t address,
+    uint32_t length)
+{
+    const uintptr_t start = (uintptr_t)NCR2_BOOT_ROM_START;
+    const uintptr_t end = (uintptr_t)NCR2_BOOT_ROM_END;
+
+    return address >= start &&
+           address < end &&
+           (uintptr_t)length <= end - address;
+}
+
+static NCR2_RAMFUNC int ram_rom_code_is_valid(uintptr_t address)
+{
+    return (address & (uintptr_t)UINT32_C(1)) != (uintptr_t)0 &&
+           ram_rom_range_is_valid(
+               address & ~(uintptr_t)UINT32_C(1),
+               UINT32_C(2));
+}
+
+static NCR2_RAMFUNC const ncr2_rom_flexspi_driver_t *
+ram_rom_flexspi_driver(void)
+{
+    const uint32_t tree_address =
+        *(volatile const uint32_t *)(uintptr_t)
+            NCR2_BOOTLOADER_TREE_POINTER;
+    const ncr2_bootloader_api_entry_t *tree;
+    const ncr2_rom_flexspi_driver_t *driver;
+
+    if (!ram_rom_range_is_valid(
+            (uintptr_t)tree_address,
+            (uint32_t)sizeof(*tree))) {
+        return NULL;
+    }
+    tree = (const ncr2_bootloader_api_entry_t *)(uintptr_t)
+        tree_address;
+    driver = tree->flexspi_nor_driver;
+    if (!ram_rom_range_is_valid(
+            (uintptr_t)driver,
+            (uint32_t)sizeof(*driver)) ||
+        !ram_rom_code_is_valid((uintptr_t)driver->init) ||
+        !ram_rom_code_is_valid((uintptr_t)driver->program)) {
+        return NULL;
+    }
+    return driver;
+}
+
+static NCR2_RAMFUNC void ram_build_rom_config(
+    flexspi_nor_config_t *config)
+{
+    uint8_t *bytes = (uint8_t *)config;
+
+    for (uint32_t index = UINT32_C(0);
+         index < (uint32_t)sizeof(*config);
+         ++index) {
+        bytes[index] = UINT8_C(0);
+    }
+    config->memConfig.tag = FLEXSPI_CFG_BLK_TAG;
+    config->memConfig.version = FLEXSPI_CFG_BLK_VERSION;
+    config->memConfig.readSampleClkSrc =
+        kFLEXSPIReadSampleClk_LoopbackInternally;
+    config->memConfig.csHoldTime = UINT8_C(3);
+    config->memConfig.csSetupTime = UINT8_C(3);
+    config->memConfig.controllerMiscOption =
+        FSL_ROM_FLEXSPI_BITMASK(
+            kFLEXSPIMiscOffset_SafeConfigFreqEnable);
+    config->memConfig.deviceType = kFLEXSPIDeviceType_SerialNOR;
+    config->memConfig.sflashPadType = kSerialFlash_4Pads;
+    config->memConfig.serialClkFreq = kFLEXSPISerialClk_30MHz;
+    config->memConfig.sflashA1Size = NCR2_FLASH_SIZE;
+    config->memConfig.lookupTable[
+        UINT32_C(4) * NOR_CMD_LUT_SEQ_IDX_READ] =
+        FSL_ROM_FLEXSPI_LUT_SEQ(
+            CMD_SDR,
+            FLEXSPI_1PAD,
+            0x03U,
+            RADDR_SDR,
+            FLEXSPI_1PAD,
+            0x18U);
+    config->memConfig.lookupTable[
+        UINT32_C(4) * NOR_CMD_LUT_SEQ_IDX_READ + UINT32_C(1)] =
+        FSL_ROM_FLEXSPI_LUT_SEQ(
+            READ_SDR,
+            FLEXSPI_1PAD,
+            0x04U,
+            STOP,
+            FLEXSPI_1PAD,
+            0x00U);
+    config->memConfig.lookupTable[
+        UINT32_C(4) * NOR_CMD_LUT_SEQ_IDX_READSTATUS] =
+        FSL_ROM_FLEXSPI_LUT_SEQ(
+            CMD_SDR,
+            FLEXSPI_1PAD,
+            0x05U,
+            READ_SDR,
+            FLEXSPI_1PAD,
+            0x01U);
+    config->memConfig.lookupTable[
+        UINT32_C(4) * NOR_CMD_LUT_SEQ_IDX_WRITEENABLE] =
+        FSL_ROM_FLEXSPI_LUT_SEQ(
+            CMD_SDR,
+            FLEXSPI_1PAD,
+            0x06U,
+            STOP,
+            FLEXSPI_1PAD,
+            0x00U);
+    config->memConfig.lookupTable[
+        UINT32_C(4) * NOR_CMD_LUT_SEQ_IDX_ERASESECTOR] =
+        FSL_ROM_FLEXSPI_LUT_SEQ(
+            CMD_SDR,
+            FLEXSPI_1PAD,
+            0x20U,
+            RADDR_SDR,
+            FLEXSPI_1PAD,
+            0x18U);
+    config->memConfig.lookupTable[
+        UINT32_C(4) * NOR_CMD_LUT_SEQ_IDX_PAGEPROGRAM] =
+        FSL_ROM_FLEXSPI_LUT_SEQ(
+            CMD_SDR,
+            FLEXSPI_1PAD,
+            0x02U,
+            RADDR_SDR,
+            FLEXSPI_1PAD,
+            0x18U);
+    config->memConfig.lookupTable[
+        UINT32_C(4) * NOR_CMD_LUT_SEQ_IDX_PAGEPROGRAM + UINT32_C(1)] =
+        FSL_ROM_FLEXSPI_LUT_SEQ(
+            WRITE_SDR,
+            FLEXSPI_1PAD,
+            0x04U,
+            STOP,
+            FLEXSPI_1PAD,
+            0x00U);
+    config->pageSize = NCR2_NOR_PAGE_SIZE;
+    config->sectorSize = NCR2_NOR_SECTOR_SIZE;
+    config->ipcmdSerialClkFreq = kFLEXSPISerialClk_30MHz;
+    config->isUniformBlockSize = UINT8_C(1);
+    config->serialNorType = kSerialNorType_StandardSPI;
+    config->blockSize = UINT32_C(0x00010000);
+}
+
+static NCR2_RAMFUNC int ram_rom_initialize(
+    flexspi_nor_config_t *config)
+{
+    const ncr2_rom_flexspi_driver_t *driver =
+        ram_rom_flexspi_driver();
+    status_t status;
+
+    if (driver == NULL) {
+        return NCR2_NOR_BACKEND_ROM_API_INVALID;
+    }
+    status = driver->init(NCR2_FLEXSPI_INSTANCE, config);
+    __DSB();
+    return status == kStatus_Success
+               ? 0
+               : NCR2_NOR_BACKEND_ROM_INIT_FAILED;
+}
+
+static NCR2_RAMFUNC int ram_rom_program_page_call(
+    flexspi_nor_config_t *config,
+    uint32_t flash_offset,
+    const uint32_t *source)
+{
+    const ncr2_rom_flexspi_driver_t *driver =
+        ram_rom_flexspi_driver();
+    status_t status;
+
+    if (driver == NULL) {
+        return NCR2_NOR_BACKEND_ROM_API_INVALID;
+    }
+    status = driver->program(
+        NCR2_FLEXSPI_INSTANCE,
+        config,
+        flash_offset,
+        source);
+    __DSB();
+    return status == kStatus_Success
+               ? 0
+               : NCR2_NOR_BACKEND_PROGRAM_TRANSFER;
+}
 
 static int range_inside(uint32_t offset,
                         uint32_t length,
@@ -138,29 +373,13 @@ static NCR2_RAMFUNC status_t ram_transfer(
         FLEXSPI_INTR_IPTXWE_MASK |
         FLEXSPI_INTR_IPRXWA_MASK;
     FLEXSPI->IPCR0 = flash_offset;
-    if (command_type == kFLEXSPI_Write ||
-        command_type == kFLEXSPI_Config) {
-        /*
-         * Make one watermark equal the recovery protocol's whole 32-byte
-         * payload. Physical testing showed stale data at bytes 8 and 24
-         * when a page program reused TFDR[0] across smaller watermark
-         * fills, even when the fills were split into separate commands.
-         * Loading TFDR[0..7] once removes that reuse altogether.
-         */
-        FLEXSPI->IPTXFCR =
-            (FLEXSPI->IPTXFCR &
-             ~(FLEXSPI_IPTXFCR_TXWMRK_MASK |
-               FLEXSPI_IPTXFCR_TXDMAEN_MASK)) |
-            FLEXSPI_IPTXFCR_TXWMRK(
-                NCR2_FLEXSPI_TX_WATERMARK) |
-            FLEXSPI_IPTXFCR_CLRIPTXF_MASK;
-    } else {
-        FLEXSPI->IPTXFCR |= FLEXSPI_IPTXFCR_CLRIPTXF_MASK;
+    if (command_type != kFLEXSPI_Command &&
+        command_type != kFLEXSPI_Read) {
+        return kStatus_Fail;
     }
+    FLEXSPI->IPTXFCR |= FLEXSPI_IPTXFCR_CLRIPTXF_MASK;
     FLEXSPI->IPRXFCR |= FLEXSPI_IPRXFCR_CLRIPRXF_MASK;
-    if (command_type == kFLEXSPI_Read ||
-        command_type == kFLEXSPI_Write ||
-        command_type == kFLEXSPI_Config) {
+    if (command_type == kFLEXSPI_Read) {
         config_value = FLEXSPI_IPCR1_IDATSZ(data_size);
     }
     config_value |=
@@ -169,59 +388,7 @@ static NCR2_RAMFUNC status_t ram_transfer(
     FLEXSPI->IPCR1 = config_value;
     FLEXSPI->IPCMD |= FLEXSPI_IPCMD_TRG_MASK;
 
-    if (command_type == kFLEXSPI_Write ||
-        command_type == kFLEXSPI_Config) {
-        const uint8_t *input = (const uint8_t *)data;
-        uint32_t remaining = data_size;
-        const uint32_t watermark =
-            ((FLEXSPI->IPTXFCR & FLEXSPI_IPTXFCR_TXWMRK_MASK) >>
-             FLEXSPI_IPTXFCR_TXWMRK_SHIFT) +
-            UINT32_C(1);
-        const uint32_t fifo_bytes = UINT32_C(8) * watermark;
-
-        while (remaining != UINT32_C(0)) {
-            uint32_t chunk;
-            uint32_t words;
-
-            for (polls = UINT32_C(0);
-                 polls < NCR2_FLEXSPI_POLL_LIMIT;
-                 ++polls) {
-                const uint32_t interrupt = FLEXSPI->INTR;
-                if ((interrupt & NCR2_FLEXSPI_ERROR_MASK) !=
-                    UINT32_C(0)) {
-                    return kStatus_Fail;
-                }
-                if ((interrupt &
-                     FLEXSPI_INTR_IPTXWE_MASK) != UINT32_C(0)) {
-                    break;
-                }
-            }
-            if (polls == NCR2_FLEXSPI_POLL_LIMIT) {
-                return kStatus_Timeout;
-            }
-            chunk = remaining < fifo_bytes ? remaining : fifo_bytes;
-            words = (chunk + UINT32_C(3)) / UINT32_C(4);
-            for (uint32_t word = UINT32_C(0);
-                 word < words;
-                 ++word) {
-                uint32_t value = UINT32_C(0);
-                for (uint32_t byte = UINT32_C(0);
-                     byte < UINT32_C(4);
-                     ++byte) {
-                    const uint32_t index =
-                        word * UINT32_C(4) + byte;
-                    if (index < chunk) {
-                        value |=
-                            (uint32_t)input[index] << (byte * UINT32_C(8));
-                    }
-                }
-                FLEXSPI->TFDR[word] = value;
-            }
-            input += chunk;
-            remaining -= chunk;
-            FLEXSPI->INTR = FLEXSPI_INTR_IPTXWE_MASK;
-        }
-    } else if (command_type == kFLEXSPI_Read) {
+    if (command_type == kFLEXSPI_Read) {
         uint8_t *output = (uint8_t *)data;
 
         if (data == NULL || data_size > UINT32_C(8)) {
@@ -396,12 +563,18 @@ static NCR2_RAMFUNC int ram_wait_until_flash_idle(void)
     return NCR2_NOR_BACKEND_BUSY_TIMEOUT;
 }
 
-static NCR2_RAMFUNC int ram_configure_and_probe(void)
+static NCR2_RAMFUNC int ram_configure_and_probe(
+    ncr2_flexspi_context_t *context)
 {
     uint32_t lut[NCR2_LUT_WORD_COUNT];
     uint32_t read_lut[NCR2_LUT_WORDS_PER_SEQUENCE] = { 0U, 0U, 0U, 0U };
     uint32_t id_word = UINT32_C(0);
     uint8_t *identifier = (uint8_t *)&id_word;
+
+    ram_build_rom_config(&context->rom_config);
+    if (ram_rom_initialize(&context->rom_config) != 0) {
+        return -1;
+    }
 
     for (uint32_t index = UINT32_C(0);
          index < NCR2_LUT_WORD_COUNT;
@@ -440,22 +613,6 @@ static NCR2_RAMFUNC int ram_configure_and_probe(void)
             kFLEXSPI_Command_RADDR_SDR,
             kFLEXSPI_1PAD,
             0x18U);
-    lut[16] =
-        FLEXSPI_LUT_SEQ(
-            kFLEXSPI_Command_SDR,
-            kFLEXSPI_1PAD,
-            0x02U,
-            kFLEXSPI_Command_RADDR_SDR,
-            kFLEXSPI_1PAD,
-            0x18U);
-    lut[17] =
-        FLEXSPI_LUT_SEQ(
-            kFLEXSPI_Command_WRITE_SDR,
-            kFLEXSPI_1PAD,
-            0x04U,
-            kFLEXSPI_Command_STOP,
-            kFLEXSPI_1PAD,
-            0x00U);
     read_lut[0] =
         FLEXSPI_LUT_SEQ(
             kFLEXSPI_Command_SDR,
@@ -544,33 +701,47 @@ static NCR2_RAMFUNC int ram_erase_sector(uint32_t flash_offset)
 }
 
 static NCR2_RAMFUNC int ram_program_page(
+    flexspi_nor_config_t *config,
     uint32_t flash_offset,
     const uint8_t *source,
     uint32_t length)
 {
     uint32_t aligned_data[NCR2_NOR_PAGE_SIZE / sizeof(uint32_t)];
     uint8_t *aligned_bytes = (uint8_t *)aligned_data;
-    int enable_status;
+    const uint32_t page_offset =
+        flash_offset & (NCR2_NOR_PAGE_SIZE - UINT32_C(1));
+    const uint32_t page_start = flash_offset - page_offset;
+    int program_status;
     int wait_status;
-    status_t program_status;
     status_t reset_status;
 
+    if (config == NULL ||
+        source == NULL ||
+        length == UINT32_C(0) ||
+        length > NCR2_NOR_PAGE_SIZE - page_offset) {
+        return NCR2_NOR_BACKEND_INVALID;
+    }
+    for (uint32_t index = UINT32_C(0);
+         index < NCR2_NOR_PAGE_SIZE;
+         ++index) {
+        aligned_bytes[index] = UINT8_C(0xFF);
+    }
+    /*
+     * ProgramPage transmits config->pageSize bytes and aligns its destination
+     * down. Staging the requested subrange into a complete erased page keeps
+     * arbitrary recovery chunks inside that contract; 0xff cannot disturb
+     * already-programmed bytes elsewhere in the physical page.
+     */
     for (uint32_t index = UINT32_C(0);
          index < length;
          ++index) {
-        aligned_bytes[index] = source[index];
-    }
-    enable_status = ram_write_enable(flash_offset);
-    if (enable_status != 0) {
-        return enable_status;
+        aligned_bytes[page_offset + index] = source[index];
     }
     program_status =
-        ram_transfer(
-            NCR2_LUT_SEQUENCE_PAGE_PROGRAM,
-            flash_offset,
-            kFLEXSPI_Write,
-            aligned_data,
-            length);
+        ram_rom_program_page_call(
+            config,
+            page_start,
+            aligned_data);
     wait_status = ram_wait_until_flash_idle();
     reset_status = ram_software_reset();
     if (wait_status != 0) {
@@ -579,9 +750,7 @@ static NCR2_RAMFUNC int ram_program_page(
     if (reset_status != kStatus_Success) {
         return NCR2_NOR_BACKEND_CONTROLLER_TIMEOUT;
     }
-    return program_status == kStatus_Success
-               ? 0
-               : NCR2_NOR_BACKEND_PROGRAM_TRANSFER;
+    return program_status;
 }
 
 static int backend_read(void *opaque,
@@ -651,13 +820,11 @@ static int backend_program_page(void *opaque,
 {
     ncr2_flexspi_context_t *context =
         (ncr2_flexspi_context_t *)opaque;
-    const uint8_t *input = (const uint8_t *)source;
     uint32_t interrupt_state;
     uint32_t page_offset =
         address & (NCR2_NOR_PAGE_SIZE - UINT32_C(1));
-    uint32_t remaining = length;
     uint32_t flash_offset = address - NCR2_FLASH_XIP_BASE;
-    int status = 0;
+    int status;
 
     if (context == NULL ||
         context->initialized == UINT8_C(0) ||
@@ -670,27 +837,11 @@ static int backend_program_page(void *opaque,
     }
     interrupt_state = __get_PRIMASK();
     __disable_irq();
-    /*
-     * Keep every page program within the configured 32-byte TX watermark,
-     * so ram_transfer fills TFDR[0..7] exactly once per command.
-     */
-    while (remaining != UINT32_C(0)) {
-        const uint32_t chunk =
-            remaining < NCR2_FLEXSPI_SAFE_PROGRAM_BYTES
-                ? remaining
-                : NCR2_FLEXSPI_SAFE_PROGRAM_BYTES;
-
-        status = ram_program_page(
-            flash_offset,
-            input,
-            chunk);
-        if (status != 0) {
-            break;
-        }
-        flash_offset += chunk;
-        input += chunk;
-        remaining -= chunk;
-    }
+    status = ram_program_page(
+        &context->rom_config,
+        flash_offset,
+        (const uint8_t *)source,
+        length);
     __set_PRIMASK(interrupt_state);
     return status;
 }
@@ -734,7 +885,7 @@ static uint16_t initialize_nor(ncr2_nor_t *nor,
     g_context.full_flash_mutation = full_flash_mutation;
     interrupt_state = __get_PRIMASK();
     __disable_irq();
-    probe_status = ram_configure_and_probe();
+    probe_status = ram_configure_and_probe(&g_context);
     __set_PRIMASK(interrupt_state);
     if (probe_status < 0) {
         return NCR2_FLEXSPI_NOR_PROBE_FAILED;

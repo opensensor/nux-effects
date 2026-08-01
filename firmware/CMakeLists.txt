@@ -245,6 +245,17 @@ add_executable(
     bootloader/src/boot_trial.c
     platform/ncr2/src/ncr2_boot_request.c
 )
+option(
+    NCR2_APP_RETURN_TO_RECOVERY_AFTER_CONFIRM
+    "Return the source app to USB recovery after a successful A/B trial"
+    OFF
+)
+if(NCR2_APP_RETURN_TO_RECOVERY_AFTER_CONFIRM)
+    target_compile_definitions(
+        ncr2_app
+        PRIVATE NCR2_APP_RETURN_TO_RECOVERY_AFTER_CONFIRM=1
+    )
+endif()
 target_include_directories(
     ncr2_app
     PRIVATE

@@ -37,8 +37,8 @@ documented in
 [docs/hardware/FACTORY_BOARD_CONTROL.md](docs/hardware/FACTORY_BOARD_CONTROL.md).
 Recovery through the immutable i.MX RT1051 ROM downloader is documented in
 [docs/hardware/ROM_SDP_RECOVERY.md](docs/hardware/ROM_SDP_RECOVERY.md). It is
-both the last resort and, while the open NOR programmer stays fail-closed,
-the routine way to install a bootloader.
+the last resort and remains the guarded way to install a new bootloader;
+ordinary application releases now use physically validated open A/B updates.
 The guarded SDRAM personality that can replace all 8 MiB through the open
 HID protocol is documented in
 [docs/hardware/RAM_FULL_FLASH_RECOVERY.md](docs/hardware/RAM_FULL_FLASH_RECOVERY.md);
@@ -80,12 +80,12 @@ Do not flash experimental firmware unless you have:
 3. reviewed the exact write ranges; and
 4. confirmed the target hardware revision.
 
-The source-level replacement bootloader now has an opt-in, structurally
-bootable RT1051 target, but it has not passed the physical hardware flash
-gate. It is read-only by default, cannot enumerate with unassigned USB IDs,
-and is not an approved image for the pedal. The currently documented USB
-tool targets the recovered factory HID bootloader and requires explicit
-hashes and execution flags.
+The source-level replacement bootloader has an opt-in RT1051 target that has
+passed physical USB recovery, bounded NOR erase/program/readback, durable A/B
+journal updates, trial confirmation, and bidirectional slot switching on the
+Verb Core Deluxe. It remains read-only by default and cannot enumerate with
+unassigned USB IDs. Whole-chip writes through Open Recover remain disabled;
+the immutable NXP ROM path is still required for bootloader replacement.
 
 ## Development status
 
@@ -93,12 +93,11 @@ The factory HID-DFU protocol has been recovered and live-tested. A factory
 Metal/Amp engine was successfully substituted into the NCR-2's selected slot,
 proving the shared Core Deluxe platform and the USB deployment path.
 
-Development is now moving to an independent bootloader, board-support
-package, deterministic audio engine, and original/open DSP implementations.
-The guarded A/B recovery transaction and matching host client are implemented
-under host tests. The complete 64-byte USB HID stack, minimal RT1051 board
-wrapper, boot journal, watchdog handoff, and RAM-resident FlexSPI backend now
-link into an opt-in hardware bootloader. Its startup installs the open vector
+Development is now moving from the physically validated independent
+bootloader and A/B updater into the board-support package, deterministic audio
+engine, and original/open DSP implementations. The complete 64-byte USB HID
+stack, RT1051 board wrapper, boot journal, watchdog handoff, and RAM-resident
+recovery backend run on the Verb Core Deluxe. Startup installs the open vector
 table explicitly, including USB OTG1, before C initialization.
 
 A separate 17 KiB SDRAM-resident recovery target now supports an explicitly
@@ -113,10 +112,10 @@ The hardware target is separately gated for USB enumeration and NOR writes.
 It defaults to unassigned USB IDs and a read-only recovery backend. A
 post-link checker verifies the vector table, VTOR initialization, protected
 flash limit, capability marker, complete USB stack, DMA-buffer placement and
-alignment, and ITCM-only flash-busy call graph. These are offline structural
-gates, not evidence that the image is safe to flash. Physical read-only USB
-bring-up, sacrificial-sector NOR testing, and watchdog rollback validation
-remain outstanding.
+alignment, and ITCM-only flash-busy call graph. Those structural gates are
+backed by physical USB, sacrificial-range NOR, boot-journal, watchdog handoff,
+and confirmation tests. Source audio, cache/MPU, and remaining board-control
+work retain their own hardware gates.
 
 The hardware reset path now also calls the pinned RT1051 `SystemInit` before
 copying ITCM routines or entering C services. This source-controls FPU access,

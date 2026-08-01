@@ -1,4 +1,5 @@
 import dataclasses
+import errno
 import importlib.util
 import struct
 import sys
@@ -247,7 +248,31 @@ class FakeTransport:
         ).encode()
 
 
+class DisconnectOnRebootTransport(FakeTransport):
+    def exchange(self, report: bytes) -> bytes:
+        request = pedalctl.Packet.decode(report)
+        if request.command == pedalctl.COMMANDS["reboot"]:
+            self.requests.append(request)
+            raise OSError(errno.ENODEV, "No such device")
+        return super().exchange(report)
+
+
 class ClientTests(unittest.TestCase):
+    def test_reboot_accepts_expected_hidraw_disconnect(self):
+        transport = DisconnectOnRebootTransport()
+        client = pedalctl.RecoveryClient(transport, retries=0)
+        client.begin(1, 0x1028)
+        client.erase()
+        client.write(bytes(0x1028))
+        client.finalize()
+        client.set_pending()
+
+        self.assertFalse(client.reboot())
+        self.assertEqual(
+            transport.requests[-1].command,
+            pedalctl.COMMANDS["reboot"],
+        )
+
     def test_full_restore_requires_physically_verified_programming(self):
         info = pedalctl.RecoveryInfo(
             flash_size=0x800000,

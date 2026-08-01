@@ -5,10 +5,12 @@ the root architecture plan.
 
 ## Current status
 
-The default binaries are **offline inspection artifacts only**. An opt-in
-RT1051 hardware bootloader is now structurally bootable and links the complete
-recovery stack, but it has not passed the physical recovery, USB, GPIO,
-FlexSPI, watchdog, or audio gates and must not be flashed to a pedal.
+The default binaries are **offline inspection artifacts only**. The separately
+gated RT1051 hardware bootloader has passed physical recovery USB, bounded
+FlexSPI erase/program/readback, durable A/B journal mutation, watchdog trial
+handoff, application confirmation, and bidirectional slot switching on a Verb
+Core Deluxe. Source audio, cache/MPU, remaining GPIO behavior, and whole-chip
+Open Recover restore retain separate hardware gates.
 
 Implemented:
 
@@ -70,11 +72,8 @@ Implemented:
 
 Not implemented:
 
-- physical validation of the recovered footswitch input wrapper;
 - a project USB VID/PID;
-- physical validation of FlexSPI erase/program on a sacrificial sector;
-- target validation of open USB recovery, hardware-backed journal mutation,
-  and watchdog confirmation/rollback;
+- physical validation of a complete 8 MiB restore through Open Recover;
 - source-controlled MPU/data-cache policy for the full open application;
 - source SEMC initialization;
 - physical validation of the source audio path and analog mute/bypass
@@ -292,8 +291,7 @@ python3 tools/open_image.py inspect \
   build/open/ncr2-open-0.1.0-full.bin
 ```
 
-The resulting full image is still not approved for hardware. The report must
-show:
+Packing a full image does not approve it for hardware. The report must show:
 
 - the first `0x2000` bytes preserved;
 - factory state and content at `0x20000–0x3effff` preserved;
@@ -316,6 +314,7 @@ python3 tools/pedalctl.py inspect-slot \
   build/open/ncr2-app-0.1.0.slot
 ```
 
-`pedalctl.py upload` exists for protocol simulation and future hardware use,
-but there is no approved open bootloader on the pedal yet. Do not point it at
-the stock NUX recovery device: the protocols are intentionally unrelated.
+`pedalctl.py upload` has passed bidirectional A/B switching on the open
+bootloader. Do not point it at the stock NUX recovery device: the protocols
+are intentionally unrelated, and the borrowed development USB identity still
+requires the explicit host flag.
