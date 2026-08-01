@@ -395,6 +395,15 @@ class FactorySlotSourceTests(unittest.TestCase):
             "NCR2_SAFE_OUTPUT_PEAK INT32_C(0x10000000)",
             application,
         )
+        self.assertIn(
+            "NCR2_DAC_OUTPUT_PEAK INT32_C(0x20000000)",
+            application,
+        )
+        self.assertIn(
+            "NCR2_OUTPUT_GAIN_Q15_MAX UINT32_C(65536)",
+            application,
+        )
+        self.assertIn("selected_magnitude", application)
         self.assertIn("NCR2_SHINE_DRIVE_Q12_RANGE", application)
         self.assertIn("NCR2_WALL_FUZZ_Q12_RANGE", application)
         self.assertIn("NCR2_RAGE_DRIVE_Q12_RANGE", application)

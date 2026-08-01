@@ -11,10 +11,14 @@ The immediate pedal configuration is the known-good static ENG3 image:
 - bootloader version marker after transfer: `ENG3TEST`
 - normal-boot result previously verified: working amp/overdrive engine
 
-The zero-wear binary shim experiment is paused. It proved that USB deployment
-and factory-engine substitution work, but it did not reliably identify the
-runtime footswitch input. The long-term design should be source firmware with
-an explicit board-support package, not more hooks into proprietary binaries.
+The original zero-wear binary shim experiment is retired as a deployment
+path. It proved that USB deployment and factory-engine substitution work, but
+its runtime monitor read GPIO1's `DR` output latch instead of the `PSR` input
+register. The source board-support package has since physically validated
+GPIO1_IO21, and the source launcher can now apply a guarded, transient return
+monitor to the copied factory engine in ITCM. The preserved NOR engines are
+never patched. Live custom-effect/program switching remains source firmware
+RAM state.
 
 ## 1. Target outcome
 

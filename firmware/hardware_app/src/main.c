@@ -39,6 +39,9 @@
 #define NCR2_LED_ALTERNATE_MS UINT32_C(200)
 #define NCR2_LED_ALTERNATE_COUNT UINT32_C(6)
 
+/* The physical audio path is proven; keep lengthy blink sweeps in bring-up. */
+#define NCR2_RUNTIME_DIAGNOSTIC_FLASHES 0
+
 #define NCR2_LABEL_ON_MS UINT32_C(180)
 #define NCR2_LABEL_OFF_MS UINT32_C(220)
 #define NCR2_LABEL_SETTLE_MS UINT32_C(700)
@@ -63,12 +66,14 @@
 /*
  * The proof-of-path fuzz emitted +/-0x40000000 for every nonzero sample.
  * That was useful once, but it was both four times the observed instrument
- * level and effectively a full-scale square wave. The musical processor has
- * a non-negotiable ceiling 12 dB below it, even with every control at max.
+ * level and effectively a full-scale square wave. Internal effects remain
+ * 12 dB below it; the final Level trim gets a separate bounded ceiling.
  */
 #define NCR2_SAFE_OUTPUT_PEAK INT32_C(0x10000000)
+#define NCR2_DAC_OUTPUT_PEAK INT32_C(0x20000000)
 #define NCR2_DRIVE_Q12_ONE UINT32_C(4096)
 #define NCR2_PARAMETER_Q15_ONE UINT32_C(32768)
+#define NCR2_OUTPUT_GAIN_Q15_MAX UINT32_C(65536)
 #define NCR2_SHINE_DRIVE_Q12_RANGE UINT32_C(94208)
 #define NCR2_WALL_FUZZ_Q12_MIN UINT32_C(16384)
 #define NCR2_WALL_FUZZ_Q12_RANGE UINT32_C(376832)
@@ -594,20 +599,32 @@ static void reset_into_recovery(void)
 volatile int32_t g_hardware_app_input_peak;
 
 /*
- * Sum the TDM slots rather than picking one. Which slot carries the
- * instrument is not yet known, and a wrong guess would produce silence that
- * looks identical to a dead capture path.
+ * The AK4619 supplies four TDM ADC slots, but the mono instrument is not
+ * present at equal level in all four. Averaging every slot imposed 6-12 dB
+ * of attenuation before DSP. Select the strongest slot for each mono frame;
+ * this is unity gain when one or more inputs carry the same guitar signal
+ * and remains independent of the board's physical ADC channel routing.
  */
 static int32_t capture_frame(const int32_t *frame_input)
 {
-    int32_t mixed = INT32_C(0);
+    int32_t selected = INT32_C(0);
+    uint32_t selected_magnitude = UINT32_C(0);
 
     for (size_t slot = 0U;
          slot < NCR2_FACTORY_AUDIO_SLOTS;
          ++slot) {
-        mixed += frame_input[slot] / (int32_t)NCR2_FACTORY_AUDIO_SLOTS;
+        const int32_t sample = frame_input[slot];
+        const uint32_t magnitude = (uint32_t)(
+            (sample < INT32_C(0))
+                ? -(int64_t)sample
+                : (int64_t)sample);
+
+        if (magnitude > selected_magnitude) {
+            selected = sample;
+            selected_magnitude = magnitude;
+        }
     }
-    return mixed;
+    return selected;
 }
 
 volatile uint32_t g_hardware_app_emit_tone;
@@ -875,8 +892,9 @@ static ncr2_effect_parameters_t make_effect_parameters(
     parameters.character_q15 =
         (character_knob * NCR2_PARAMETER_Q15_ONE) /
         NCR2_KNOB_ADC_MAX;
+    /* Level is unity at the physical midpoint and reaches +6 dB at max. */
     parameters.output_q15 =
-        (output_knob * NCR2_PARAMETER_Q15_ONE) /
+        (output_knob * NCR2_OUTPUT_GAIN_Q15_MAX) /
         NCR2_KNOB_ADC_MAX;
     parameters.shine_drive_q12 =
         NCR2_DRIVE_Q12_ONE +
@@ -1305,7 +1323,7 @@ static int32_t apply_effect_output(
         (int64_t)NCR2_PARAMETER_Q15_ONE;
     return (int32_t)clamp_symmetric(
         sample,
-        (int64_t)NCR2_SAFE_OUTPUT_PEAK);
+        (int64_t)NCR2_DAC_OUTPUT_PEAK);
 }
 
 void ncr2_factory_audio_process_block(
@@ -1382,8 +1400,10 @@ void ncr2_factory_audio_process_block(
  */
 void application_main(void)
 {
+#if NCR2_RUNTIME_DIAGNOSTIC_FLASHES
     uint32_t blocks_before;
     uint32_t tx_blocks_before;
+#endif
     uint8_t requested_factory_engine = UINT8_C(0);
     ncr2_codec_bus_t codec_bus = { UINT32_C(0), UINT8_C(0) };
 
@@ -1441,7 +1461,18 @@ void application_main(void)
         (uint32_t)ncr2_factory_board_prepare_audio();
     ncr2_factory_board_restore_idle();
     ncr2_factory_board_set_relay(UINT8_C(0));
+    if (g_hardware_app_factory_request_status ==
+            NCR2_FACTORY_REQUEST_OK &&
+        g_hardware_app_factory_launch_status !=
+            NCR2_FACTORY_LAUNCH_OK) {
+        /* A guarded launch refusal must not resemble a normal open boot. */
+        flash_code(
+            NCR2_LED_RED,
+            g_hardware_app_factory_launch_status);
+    }
+#if NCR2_RUNTIME_DIAGNOSTIC_FLASHES
     diagnostic_delay_ms(NCR2_LED_LEAD_IN_MS);
+#endif
 
     /*
      * Report the two preconditions on the indicator before the routing
@@ -1453,11 +1484,15 @@ void application_main(void)
         (uint32_t)ncr2_factory_audio_init();
     if (g_hardware_app_audio_status == NCR2_FACTORY_AUDIO_OK) {
         ncr2_factory_board_release_audio();
+#if NCR2_RUNTIME_DIAGNOSTIC_FLASHES
         flash_code(NCR2_LED_GREEN, UINT32_C(2));
+#endif
     } else {
         flash_code(NCR2_LED_RED, UINT32_C(2));
+        reset_into_recovery();
     }
 
+#if NCR2_RUNTIME_DIAGNOSTIC_FLASHES
     /*
      * Three yellow flashes mean transmit blocks are actually being
      * consumed, so the tone is genuinely leaving the DMA. Three red mean
@@ -1472,6 +1507,7 @@ void application_main(void)
             ? NCR2_LED_BOTH
             : NCR2_LED_RED,
         UINT32_C(3));
+#endif
 
     /*
      * Release whichever traced output is the codec's PDN, then wait past
@@ -1485,7 +1521,9 @@ void application_main(void)
     g_hardware_app_codec_candidate = codec_bus.candidate;
     g_hardware_app_codec_address = codec_bus.address;
 
+#if NCR2_RUNTIME_DIAGNOSTIC_FLASHES
     flash_code(NCR2_LED_BOTH, codec_bus.candidate + UINT32_C(1));
+#endif
 
     if (g_hardware_app_codec_found != NCR2_CODEC_PROBE_FOUND) {
         /* Nothing to configure; say so and stop rather than mislead. */
@@ -1534,13 +1572,15 @@ void application_main(void)
             ++g_hardware_app_codec_failures;
         }
     }
-    flash_code(
-        (g_hardware_app_codec_failures == UINT32_C(0))
-            ? NCR2_LED_GREEN
-            : NCR2_LED_RED,
-        (g_hardware_app_codec_failures == UINT32_C(0))
-            ? UINT32_C(1)
-            : g_hardware_app_codec_failures);
+    if (g_hardware_app_codec_failures == UINT32_C(0)) {
+#if NCR2_RUNTIME_DIAGNOSTIC_FLASHES
+        flash_code(NCR2_LED_GREEN, UINT32_C(1));
+#endif
+    } else {
+        flash_code(
+            NCR2_LED_RED,
+            g_hardware_app_codec_failures);
+    }
 
     /*
      * Candidate 3 and the AK4619 reset signature are now proven on the
@@ -1550,11 +1590,14 @@ void application_main(void)
      * control indefinitely. The
      * active-low main footswitch is debounced. A short press toggles on its
      * release; holding for two seconds instead launches the preserved
-     * factory engine selected by the current pair of Type positions. Off
+     * factory engine selected by the current pair of Type positions. The
+     * factory RAM bridge provides two gestures: hold for two to five seconds
+     * and release to launch the Type-selected factory engine, or hold for at
+     * least five seconds and release to warm-reset back into this open bank. Off
      * selects the traced IO25 bypass route and emits no DSP signal. On
      * selects the complementary IO24 route, enables the bounded multi-effect
      * processor, and lights the red die. A physical recovery boot remains
-     * available on the next power cycle.
+     * independently available with a footswitch hold during power-on.
      */
     if (g_hardware_app_codec_failures == UINT32_C(0)) {
         uint8_t raw_pressed =

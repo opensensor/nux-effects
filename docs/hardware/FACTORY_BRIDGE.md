@@ -79,15 +79,49 @@ A two-second footswitch hold maps adjacent Type detents to those four banks,
 puts the analog path in bypass, and flashes the bank number. The application
 then clears its diagnostic recovery token, publishes a one-word request in
 retained SRC GPR10, and warm-resets. On the next application entry the token
-is cleared before it is inspected, the selected vector pair is validated,
-interrupts are disabled, the compatibility state is restored, and exactly
-`0x1e000` bytes are copied into ITCM. A random token, invalid engine, or
-changed vector returns to the open application without touching ITCM.
+is cleared before it is inspected. Before ITCM is touched, the launcher
+validates the selected stack/reset vectors, the exact main-loop call and
+stock LED-updater entry used as its service hook, and the complete zero-filled
+256-byte tail cave. A random token, invalid engine, changed hook, or occupied cave
+returns to the open application without touching ITCM. A guarded-launch
+refusal flashes its numeric status in red before continuing into the open
+bank, rather than silently resembling a normal selection.
 
-This is a one-shot handoff rather than a resident supervisor. Proprietary
-engine code owns the processor after the branch, so it cannot call the open
-gesture handler. A normal power cycle returns to the open bank; the separate
-power-on footswitch hold still enters Open Recover.
+After those checks, interrupts are disabled, the compatibility state is
+restored, and exactly `0x1e000` bytes are copied into ITCM. The launcher then
+applies three transient changes to that RAM copy only:
+
+- a 256-byte position-independent footswitch monitor is copied into the
+  audited cave at `0x1df00`;
+- the original stock LED-updater Thumb entry is stored in the final four
+  bytes of that cave; and
+- one main-loop `BL` to that updater is redirected to the monitor.
+
+The selected hook runs once per 48 factory audio frames, approximately 1 kHz,
+and is proven active by the stock pedal's own footswitch/LED behavior. The
+monitor samples active-low GPIO1_IO21 through `GPIO1_PSR`; on every normal
+pass it tail-calls the exact original LED updater with the factory call's LR
+untouched. No vector, timer, interrupt-enable, or audio-DMA state is changed.
+
+Holding for two to five seconds and releasing selects a factory engine using
+the Type knob's live ADC_ETC chain-2 result: positions 1–2 Delay, 3–4 Reverb,
+5–6 Modulation, and 7–8 Metal. Holding for at least five seconds and releasing
+returns to the open bank. The thresholds are the midpoints between the eight
+measured physical detents. The monitor uses only SRC GPR7 as a volatile hold
+counter and GPR10 for the same one-shot factory request consumed by the open
+application, leaving the open recovery and trial mailboxes untouched. Waiting
+for release prevents the bootloader from mistaking either gesture for the
+power-on Open Recover gesture.
+
+This is still not a resident supervisor: the proprietary DSP remains in
+control between main-loop service calls. It is now a reversible handoff,
+however.
+From the open bank, a Type pair plus a two-second hold launches any factory
+engine. From a factory engine, select the destination with the same Type pairs
+and hold for two to five seconds; a five-second hold returns to the custom
+bank. The stock Type control remains available to the factory engine itself.
+No factory NOR byte is modified. The independent power-on hold still enters
+Open Recover.
 
 ## Dependency audit and corrected metadata location
 

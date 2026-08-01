@@ -375,7 +375,8 @@ static uint16_t hardware_app_process(
 {
     hardware_app_context_t *context =
         (hardware_app_context_t *)opaque;
-    const float scale = (float)NCR2_SAFE_OUTPUT_PEAK;
+    const float input_scale = (float)NCR2_SAFE_OUTPUT_PEAK;
+    const float output_scale = (float)NCR2_DAC_OUTPUT_PEAK;
 
     if (block->frame_count > HARDWARE_APP_MAX_FRAMES) {
         return EFFECT_RUNTIME_INVALID_ARGUMENT;
@@ -398,7 +399,7 @@ static uint16_t hardware_app_process(
             mixed += block->channels[channel][frame];
         }
         mixed /= (float)block->channel_count;
-        fixed = (int64_t)(mixed * scale);
+        fixed = (int64_t)(mixed * input_scale);
         if (fixed > (int64_t)NCR2_SAFE_OUTPUT_PEAK) {
             fixed = (int64_t)NCR2_SAFE_OUTPUT_PEAK;
         } else if (fixed < -(int64_t)NCR2_SAFE_OUTPUT_PEAK) {
@@ -424,7 +425,7 @@ static uint16_t hardware_app_process(
         const float value =
             (float)g_hardware_app_adapter_output
                 [(size_t)frame * NCR2_FACTORY_AUDIO_SLOTS] /
-            scale;
+            output_scale;
 
         for (uint8_t channel = UINT8_C(0);
              channel < block->channel_count;

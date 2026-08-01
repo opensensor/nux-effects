@@ -28,8 +28,13 @@ COMMON_SYMBOLS = {
 # claims to test, so a silently gutted image cannot pass the audit.
 PROFILE_SYMBOLS = {
     "audio": {
-        "ncr2_factory_engine_copy_and_jump",
+        "ncr2_factory_engine_copy_to_itcm",
         "ncr2_factory_engine_launch",
+        "ncr2_factory_engine_sync_and_jump",
+        "ncr2_factory_return_monitor",
+        "ncr2_factory_return_monitor_start",
+        "ncr2_factory_return_monitor_original_led",
+        "ncr2_factory_return_monitor_end",
         "ncr2_factory_audio_process_block",
         "ncr2_factory_board_release_audio",
     },
@@ -143,6 +148,57 @@ def check_vectors(binary: Path, found: dict[str, int]) -> None:
         )
 
 
+def check_factory_monitor(binary: Path, found: dict[str, int]) -> None:
+    start = found["ncr2_factory_return_monitor_start"]
+    original_led = found["ncr2_factory_return_monitor_original_led"]
+    end = found["ncr2_factory_return_monitor_end"]
+
+    if original_led - start != 0xFC:
+        raise CheckError(
+            "factory LED tail-call entry is not at code-cave offset 0xfc"
+        )
+    if not start < end or end - start != 0x100:
+        raise CheckError(
+            "factory return monitor does not exactly fill its 256-byte cave"
+        )
+    image = binary.read_bytes()
+    first = start - SDRAM_START
+    last = end - SDRAM_START
+    if first < 0 or last > len(image):
+        raise CheckError("factory return monitor is outside the app binary")
+    monitor = image[first:last]
+    required_words = {
+        0x401B8008,  # GPIO1 input PSR
+        0x403B002C,  # ADC_ETC trigger 0, chain 2 selector result
+        0x400F8038,  # SRC GPR7 hold counter
+        0x400F8044,  # SRC GPR10 return latch
+        0x46414330,  # factory request magic
+        0xE000ED0C,  # AIRCR warm reset
+        0x05FA0004,  # reset key and SYSRESETREQ
+    }
+    monitor_words = {
+        int.from_bytes(monitor[index:index + 4], "little")
+        for index in range(0, len(monitor) - 3, 4)
+    }
+    missing = sorted(required_words - monitor_words)
+    if missing:
+        raise CheckError(
+            "factory return monitor is missing pinned words: "
+            + ", ".join(f"{word:#010x}" for word in missing)
+        )
+    forbidden_words = {
+        0x401B8000,  # GPIO1 DR output latch, not an input sampler
+        0x400F803C,  # recovery mailbox GPR8
+        0x400F8040,  # recovery mailbox GPR9
+    }
+    present = sorted(forbidden_words & monitor_words)
+    if present:
+        raise CheckError(
+            "factory return monitor contains forbidden words: "
+            + ", ".join(f"{word:#010x}" for word in present)
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("elf", type=Path)
@@ -176,6 +232,8 @@ def main() -> int:
                 )
         check_branches(arguments.prefix + "objdump", arguments.elf)
         check_vectors(arguments.binary, found)
+        if arguments.profile == "audio":
+            check_factory_monitor(arguments.binary, found)
     except (OSError, CheckError) as error:
         parser.error(str(error))
 

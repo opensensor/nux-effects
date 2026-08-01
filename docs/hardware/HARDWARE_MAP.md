@@ -37,7 +37,7 @@ tracing distinguishes the active audio path from unused shared SDK code:
 
 | Function | Candidate/inference | Status | Required evidence |
 |---|---|---|---|
-| DFU footswitch | active-low GPIO1_IO21 on `GPIO_AD_B1_05`, guarded by active-high GPIO3_IO02 on `GPIO_SD_B1_02` | source-confirmed early-boot behavior; PCB continuity pending | continuity or controlled register observation |
+| DFU/runtime footswitch | active-low GPIO1_IO21 on `GPIO_AD_B1_05`, guarded at boot by active-high GPIO3_IO02 on `GPIO_SD_B1_02` | physically confirmed by open-bank short press and two-second runtime hold | PCB continuity remains useful but is no longer required for the firmware mapping |
 | second footswitch | unknown | unresolved | continuity/register observation |
 | Decay knob | ADC1 channel 5 (`GPIO_AD_B1_00`) | source-confirmed from executed Reverb ADC_ETC chain and parameter path | live range check |
 | Tweak knob | ADC1 channel 8 (`GPIO_AD_B1_03`) | source-confirmed from executed Reverb ADC_ETC chain and parameter path | live range check |
@@ -47,14 +47,11 @@ tracing distinguishes the active audio path from unused shared SDK code:
 | mode/status LEDs | GPIO/PWM unknown | unresolved | continuity and safe current-path trace |
 | bypass/mute | relay/switch/control unknown | unresolved | component ID and oscilloscope |
 
-The failed binary monitor experiment is specifically evidence that
-GPIO1_IO21 must not be treated as the runtime switch mapping without another
-measurement.
-
-The opt-in open board adapter intentionally uses this pair only for the
-recovery condition sampled at startup. It configures both pads as inputs with
-100 kOhm pull-ups and hysteresis, and contains no GPIO output writes. This
-does not promote either pin to a runtime footswitch mapping.
+The earlier binary monitor sampled GPIO1's `DR` output latch and therefore
+could not observe a runtime input. The physically working open-bank gestures
+establish GPIO1_IO21 as the runtime switch; runtime code reads `PSR` at
+`0x401b8008`. The board adapter configures the pad as an input with a 100 kOhm
+pull-up and hysteresis and contains no footswitch GPIO output writes.
 
 ## Audio interface
 
@@ -93,14 +90,18 @@ The source audio application also gives the footswitch two gestures:
   1–2 select Delay, 3–4 select Reverb, 5–6 select Modulation, and 7–8 select
   Metal. The indicator flashes that factory bank number before warm reset.
 
-The launch request occupies only retained SRC GPR10, is consumed before any
-audio initialization, and validates the chosen engine's exact stack and reset
-vectors before replacing ITCM. It is deliberately one-shot: an ordinary
-power cycle, or a reset initiated by the proprietary engine, returns to the
-open bank. While a proprietary engine owns the MCU the open footswitch code
-cannot run, so cycling directly from one factory engine to another is not yet
-claimed. Holding the footswitch while applying power remains the independent
-Open Recover gesture.
+The launch request occupies only retained SRC GPR10 and is consumed before
+audio initialization. Before replacing ITCM, the launcher validates the
+chosen engine's exact stack/reset, its main-loop call and stock LED-updater
+entry, and its zero-filled 256-byte tail cave. It patches only the ITCM RAM
+copy: one proven main-loop call is redirected through a monitor that samples
+the footswitch and then tail-calls the original stock LED updater. No factory
+interrupt vector is changed. The preserved factory NOR remains byte-identical.
+In a factory engine, choose the destination with the same Type-detent pairs,
+hold for two to five seconds, and release. Hold for at least five seconds and
+release to warm-reset into the open bank.
+The factory Type knob continues to select that stock engine's own modes.
+Holding while applying power remains the independent Open Recover gesture.
 
 ### Type selector: measured 2026-07-27
 
@@ -177,8 +178,16 @@ presets followed by four tight or experimental heavy presets. From low to
 high ADC value they are Shine Drive, Wall Fuzz, Breathe Vibe, Echoes Tape,
 Rage Drive, Cocked Wah, Guerrilla Trem and Whammy Fuzz. These names describe
 the intended playing response rather than copies of a proprietary circuit.
-All eight retain the same `+/-0x10000000` final sample ceiling as the
-physically validated lower-level drive build.
+All eight retain the `+/-0x10000000` internal DSP ceiling. The final DAC
+stage permits `+/-0x20000000`, because the Level control now reaches +6 dB
+instead of stopping at unity.
+
+The first source build averaged all four AK4619 input slots and mapped the
+full Level travel to 0..1x. On this mono pedal that made the open bank 12–18
+dB quieter than a stock engine: inactive TDM slots diluted the input, and a
+noon Level setting imposed another 6 dB cut. The runtime now selects the
+strongest ADC slot per frame and maps Level to 0..2x, putting unity at the
+physical midpoint while retaining a bounded +6 dB trim range.
 
 The two physically preferred modulation slots, Breathe Vibe and Guerrilla
 Trem, remain unchanged. Shine Drive, Wall Fuzz, Rage Drive and Whammy Fuzz

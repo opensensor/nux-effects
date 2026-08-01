@@ -434,6 +434,7 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
         factory_bridge/src/factory_engine_copy.S
         factory_bridge/src/factory_engine_launcher.c
         factory_bridge/src/factory_engine_request.c
+        factory_bridge/src/factory_return_monitor.S
         factory_slot/src/audio_passthrough.c
         factory_slot/src/board_control.c
         ${NCR2_HARDWARE_APP_SYSTEM_SOURCE}

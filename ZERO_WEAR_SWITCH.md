@@ -1,10 +1,21 @@
 # Zero-wear four-engine switching
 
-This is a static prototype for selecting all four factory engines without
-erasing NOR flash at runtime.
+This is a historical static prototype for selecting all four factory engines
+without erasing NOR flash at runtime. It is retired as a deployment path; the
+open application now patches only a validated engine copy in ITCM. The current
+source implementation is documented in `docs/hardware/FACTORY_BRIDGE.md` and
+hooks a proven stock main-loop call rather than any interrupt vector.
 
 Nothing in `zero_wear/` writes a device. `tools/build_zero_wear.py` only
-creates local binaries and a guarded BINA artifact for later review.
+creates local binaries and a guarded BINA artifact for historical review.
+
+The prototype's failed physical monitor test is now explained: the assembly
+sampled GPIO1 `DR` (`0x401b8000`), which is the output latch, rather than
+GPIO1 `PSR` (`0x401b8008`), which reports the pin input. The source launcher
+uses `PSR`, avoids the open bootloader's GPR8/GPR9 recovery mailbox, validates
+every patch site at runtime, and makes no factory-flash changes. Direct GPT
+and audio-DMA interrupt-monitor variants were both retired after physical
+tests showed that neither remained callable after the first handoff.
 
 ## Design
 

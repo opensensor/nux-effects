@@ -7,11 +7,13 @@ enum {
     NCR2_FACTORY_LAUNCH_OK = 0,
     NCR2_FACTORY_LAUNCH_INVALID_ENGINE = 1,
     NCR2_FACTORY_LAUNCH_VECTOR_MISMATCH = 2,
+    NCR2_FACTORY_LAUNCH_PATCH_MISMATCH = 3,
 };
 
 /*
- * Validate and launch one preserved factory engine. A successful call does
- * not return; an invalid index or changed factory vector fails closed.
+ * Validate and launch one preserved factory engine, adding the RAM-only
+ * knob-select/return monitor. A successful call does not return; an invalid
+ * index or changed vector/hook/cave fails closed before ITCM is modified.
  */
 int ncr2_factory_engine_launch(uint8_t engine);
 
