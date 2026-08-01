@@ -62,6 +62,33 @@ private test image is assembled locally from the user's verified dump, and
 the guarded packer proves that the factory compatibility region is
 byte-identical.
 
+## Dynamic factory launch from the open bank
+
+The source audio application reuses the proven compatibility preparation but
+does not hard-wire the Metal address. It has original-source descriptors for
+the four preserved engine vector pairs:
+
+| Bank | XIP source | stack | reset |
+|---|---:|---:|---:|
+| Delay | `0x60060000` | `0x20018000` | `0x0000f8cd` |
+| Reverb | `0x60080000` | `0x20018000` | `0x00019095` |
+| Modulation | `0x600a0000` | `0x20020000` | `0x0000c04d` |
+| Metal | `0x600c0000` | `0x20018000` | `0x0000e4b5` |
+
+A two-second footswitch hold maps adjacent Type detents to those four banks,
+puts the analog path in bypass, and flashes the bank number. The application
+then clears its diagnostic recovery token, publishes a one-word request in
+retained SRC GPR10, and warm-resets. On the next application entry the token
+is cleared before it is inspected, the selected vector pair is validated,
+interrupts are disabled, the compatibility state is restored, and exactly
+`0x1e000` bytes are copied into ITCM. A random token, invalid engine, or
+changed vector returns to the open application without touching ITCM.
+
+This is a one-shot handoff rather than a resident supervisor. Proprietary
+engine code owns the processor after the branch, so it cannot call the open
+gesture handler. A normal power cycle returns to the open bank; the separate
+power-on footswitch hold still enters Open Recover.
+
 ## Dependency audit and corrected metadata location
 
 Ghidra has 10,000–14,000 decoded instructions and 3,000–4,000 reference

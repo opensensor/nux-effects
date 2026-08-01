@@ -24,8 +24,8 @@ in [docs/app/EFFECT_RUNTIME.md](docs/app/EFFECT_RUNTIME.md).
 The host page for designing programs, authoring effects in C, and previewing
 them through the firmware's own runtime is documented in
 [docs/app/EFFECT_EDITOR.md](docs/app/EFFECT_EDITOR.md).
-The copyright-neutral diagnostic path that chain-loads the preserved factory
-Metal engine is documented in
+The copyright-neutral paths that chain-load the preserved factory Metal
+engine and dynamically launch any of the four preserved engines are documented in
 [docs/hardware/FACTORY_BRIDGE.md](docs/hardware/FACTORY_BRIDGE.md).
 The source-built ITCM application target that matches the recovered factory
 launcher ABI is documented in

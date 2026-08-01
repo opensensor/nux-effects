@@ -26,6 +26,9 @@ Implemented:
   on journal or image failure;
 - a fixed, one-shot software-recovery mailbox in retained SRC GPR8/GPR9,
   plus an application-facing arm API;
+- a one-word, one-shot factory-engine mailbox in retained SRC GPR10, with a
+  two-second runtime footswitch gesture and four vector-validated launch
+  descriptors;
 - a replay- and torn-write-safe pending-trial mailbox in SRC GPR3–GPR6,
   binding application health confirmation to one slot and journal sequence;
 - a host-tested handoff service that starts an injected trial watchdog and
@@ -63,6 +66,9 @@ Implemented:
 - an opt-in, copyright-neutral factory Metal bridge that validates the
   preserved vectors, copies the engine to ITCM, and reproduces the stock
   handoff without embedding factory bytes.
+- a dynamic source launcher that reuses the compatibility preparation for
+  Delay, Reverb, Modulation, or Metal and returns to the open bank after an
+  ordinary power cycle;
 - an opt-in source application linked to the recovered factory ITCM slot ABI,
   with a strict post-link checker and paired OEM-DFU/Metal-restore packer;
 - an opt-in factory-compatible SAI1/eDMA passthrough with DTCM ping-pong

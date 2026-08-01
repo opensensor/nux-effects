@@ -85,6 +85,23 @@ them a conventional pedal mapping:
 | Type | eight-position effect selector |
 | Level | effect output level |
 
+The source audio application also gives the footswitch two gestures:
+
+- a short press, completed on release, toggles the open effect and analog
+  bypass; and
+- a two-second hold launches one preserved factory engine. Type positions
+  1–2 select Delay, 3–4 select Reverb, 5–6 select Modulation, and 7–8 select
+  Metal. The indicator flashes that factory bank number before warm reset.
+
+The launch request occupies only retained SRC GPR10, is consumed before any
+audio initialization, and validates the chosen engine's exact stack and reset
+vectors before replacing ITCM. It is deliberately one-shot: an ordinary
+power cycle, or a reset initiated by the proprietary engine, returns to the
+open bank. While a proprietary engine owns the MCU the open footswitch code
+cannot run, so cycling directly from one factory engine to another is not yet
+claimed. Holding the footswitch while applying power remains the independent
+Open Recover gesture.
+
 ### Type selector: measured 2026-07-27
 
 Measured on physical hardware over `RECOVERY_COMMAND_READ_KNOBS`, stepping

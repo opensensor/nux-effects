@@ -428,7 +428,12 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
         hardware_app/src/startup.S
         hardware_app/src/main.c
         hardware_app/src/codec_probe.c
+        hardware_app/src/footswitch_gesture.c
         bootloader/src/boot_trial.c
+        factory_bridge/src/board_compat.c
+        factory_bridge/src/factory_engine_copy.S
+        factory_bridge/src/factory_engine_launcher.c
+        factory_bridge/src/factory_engine_request.c
         factory_slot/src/audio_passthrough.c
         factory_slot/src/board_control.c
         ${NCR2_HARDWARE_APP_SYSTEM_SOURCE}
@@ -438,6 +443,7 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
         ncr2_hardware_audio_app
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/hardware_app/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/factory_bridge/include
             ${CMAKE_CURRENT_SOURCE_DIR}/factory_slot/include
             ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
             ${CMAKE_CURRENT_SOURCE_DIR}/platform/ncr2/include

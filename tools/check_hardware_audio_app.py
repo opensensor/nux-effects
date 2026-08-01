@@ -28,6 +28,8 @@ COMMON_SYMBOLS = {
 # claims to test, so a silently gutted image cannot pass the audit.
 PROFILE_SYMBOLS = {
     "audio": {
+        "ncr2_factory_engine_copy_and_jump",
+        "ncr2_factory_engine_launch",
         "ncr2_factory_audio_process_block",
         "ncr2_factory_board_release_audio",
     },

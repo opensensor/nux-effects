@@ -47,4 +47,12 @@
 #define NCR2_BOOT_MAILBOX_ADDRESS UINT32_C(0x400F803C)
 #define NCR2_BOOT_MAILBOX_SIZE UINT32_C(0x00000008)
 
+/*
+ * SRC GPR10. The one-word signature and two-bit engine selector request a
+ * one-shot factory launch after warm reset. GPR1..GPR10 is the complete SRC
+ * GPR range on RT1051, so this deliberately does not assume a GPR11.
+ */
+#define NCR2_FACTORY_REQUEST_MAILBOX_ADDRESS UINT32_C(0x400F8044)
+#define NCR2_FACTORY_REQUEST_MAILBOX_SIZE UINT32_C(0x00000004)
+
 #endif

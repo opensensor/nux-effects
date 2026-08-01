@@ -8,9 +8,12 @@
 #include "fsl_iomuxc.h"
 
 #include "codec_probe.h"
+#include "footswitch_gesture.h"
 
 #include "boot_recovery_request.h"
 #include "boot_trial.h"
+#include "factory_engine_launcher.h"
+#include "factory_engine_request.h"
 #include "ncr2_flash_layout.h"
 
 /* RT1051 WDOG1 service sequence and an eight second timeout, (WT+1)/2. */
@@ -166,8 +169,15 @@ volatile uint32_t g_hardware_app_knob_character = UINT32_C(1024);
 volatile uint32_t g_hardware_app_knob_selector;
 volatile uint32_t g_hardware_app_knob_output = UINT32_C(1024);
 volatile uint32_t g_hardware_app_effect_index;
+volatile uint32_t g_hardware_app_factory_request_status;
+volatile uint32_t g_hardware_app_factory_launch_status;
 static uint32_t g_selector_candidate;
 static uint32_t g_selector_candidate_samples;
+
+_Static_assert(
+    sizeof(ncr2_factory_engine_mailbox_t) <=
+        NCR2_FACTORY_REQUEST_MAILBOX_SIZE,
+    "factory request exceeds SRC GPR10");
 
 /*
  * A trial boot arms WDOG1 for eight seconds. Every wait in this build is
@@ -281,6 +291,36 @@ static void clear_recovery_request(void)
     mailbox[0] = UINT32_C(0);
     mailbox[1] = UINT32_C(0);
     __DSB();
+}
+
+/*
+ * Replace the diagnostic warm-reset recovery request with a one-shot
+ * factory-engine request. The reset gives the proprietary engine the same
+ * clean peripheral state as a normal boot; the open app consumes GPR10 and
+ * validates the preserved vectors before copying anything into ITCM.
+ */
+static void reset_into_factory_engine(uint8_t engine)
+{
+    ncr2_factory_engine_mailbox_t *const mailbox =
+        (ncr2_factory_engine_mailbox_t *)(uintptr_t)
+            NCR2_FACTORY_REQUEST_MAILBOX_ADDRESS;
+
+    clear_recovery_request();
+    g_hardware_app_factory_request_status =
+        (uint32_t)ncr2_factory_engine_request_arm(
+            mailbox,
+            engine);
+    if (g_hardware_app_factory_request_status !=
+        NCR2_FACTORY_REQUEST_OK) {
+        arm_recovery_request();
+        return;
+    }
+
+    __DSB();
+    NVIC_SystemReset();
+    for (;;) {
+        __asm volatile("wfi");
+    }
 }
 
 /*
@@ -1344,7 +1384,25 @@ void application_main(void)
 {
     uint32_t blocks_before;
     uint32_t tx_blocks_before;
+    uint8_t requested_factory_engine = UINT8_C(0);
     ncr2_codec_bus_t codec_bus = { UINT32_C(0), UINT8_C(0) };
+
+    /*
+     * Consume the launch request before arming diagnostic recovery or
+     * touching audio hardware. Success transfers control and never returns;
+     * a changed vector or random GPR value fails closed into the open app.
+     */
+    g_hardware_app_factory_request_status =
+        (uint32_t)ncr2_factory_engine_request_consume(
+            (ncr2_factory_engine_mailbox_t *)(uintptr_t)
+                NCR2_FACTORY_REQUEST_MAILBOX_ADDRESS,
+            &requested_factory_engine);
+    if (g_hardware_app_factory_request_status ==
+        NCR2_FACTORY_REQUEST_OK) {
+        g_hardware_app_factory_launch_status =
+            (uint32_t)ncr2_factory_engine_launch(
+                requested_factory_engine);
+    }
 
     /*
      * Report execution before doing anything that could stall: from here
@@ -1490,11 +1548,13 @@ void application_main(void)
      * soon as configuration and post-routing readback succeed, hold the
      * exact stock post-SAI control state and expose an ordinary stompbox
      * control indefinitely. The
-     * active-low main footswitch is debounced and toggles only on its
-     * pressed edge. Off selects the traced IO25 bypass route and emits no
-     * DSP signal. On selects the complementary IO24 route, enables the
-     * bounded multi-effect processor, and lights the red die. A physical
-     * recovery boot remains available on the next power cycle.
+     * active-low main footswitch is debounced. A short press toggles on its
+     * release; holding for two seconds instead launches the preserved
+     * factory engine selected by the current pair of Type positions. Off
+     * selects the traced IO25 bypass route and emits no DSP signal. On
+     * selects the complementary IO24 route, enables the bounded multi-effect
+     * processor, and lights the red die. A physical recovery boot remains
+     * available on the next power cycle.
      */
     if (g_hardware_app_codec_failures == UINT32_C(0)) {
         uint8_t raw_pressed =
@@ -1502,6 +1562,11 @@ void application_main(void)
         uint8_t debounced_pressed = raw_pressed;
         uint8_t effect_enabled = UINT8_C(0);
         uint32_t stable_ms = UINT32_C(0);
+        ncr2_footswitch_gesture_t footswitch_gesture;
+
+        ncr2_footswitch_gesture_init(
+            &footswitch_gesture,
+            debounced_pressed);
 
         g_hardware_app_knob_adc_ready =
             (uint32_t)initialize_knob_adc();
@@ -1529,33 +1594,51 @@ void application_main(void)
             if (stable_ms >= NCR2_SWITCH_DEBOUNCE_MS &&
                 debounced_pressed != raw_pressed) {
                 debounced_pressed = raw_pressed;
-                if (debounced_pressed != UINT8_C(0)) {
-                    effect_enabled =
-                        (effect_enabled == UINT8_C(0))
-                            ? UINT8_C(1)
-                            : UINT8_C(0);
-                    if (effect_enabled != UINT8_C(0)) {
-                        /*
-                         * Let the DSP ramp and current algorithm settle
-                         * behind the dry route before switching the jack.
-                         */
-                        g_hardware_app_enable_effect = UINT32_C(1);
-                        diagnostic_delay_ms(
-                            NCR2_EFFECT_ROUTE_SETTLE_MS);
-                        ncr2_factory_board_set_relay(UINT8_C(1));
-                    } else {
-                        /*
-                         * Restore analog bypass before ramping down the
-                         * converter output, so disengaging cannot make a gap.
-                         */
-                        ncr2_factory_board_set_relay(UINT8_C(0));
-                        g_hardware_app_enable_effect = UINT32_C(0);
-                    }
-                    ncr2_factory_board_set_indicator(
-                        (effect_enabled != UINT8_C(0))
-                            ? NCR2_LED_RED
-                            : NCR2_LED_OFF);
+            }
+            const uint8_t footswitch_event =
+                ncr2_footswitch_gesture_update(
+                    &footswitch_gesture,
+                    debounced_pressed,
+                    NCR2_SWITCH_POLL_MS);
+            if (footswitch_event == NCR2_FOOTSWITCH_EVENT_TAP) {
+                effect_enabled =
+                    (effect_enabled == UINT8_C(0))
+                        ? UINT8_C(1)
+                        : UINT8_C(0);
+                if (effect_enabled != UINT8_C(0)) {
+                    /*
+                     * Let the DSP ramp and current algorithm settle behind
+                     * the dry route before switching the jack.
+                     */
+                    g_hardware_app_enable_effect = UINT32_C(1);
+                    diagnostic_delay_ms(NCR2_EFFECT_ROUTE_SETTLE_MS);
+                    ncr2_factory_board_set_relay(UINT8_C(1));
+                } else {
+                    /*
+                     * Restore analog bypass before ramping down converter
+                     * output, so disengaging cannot make a gap.
+                     */
+                    ncr2_factory_board_set_relay(UINT8_C(0));
+                    g_hardware_app_enable_effect = UINT32_C(0);
                 }
+                ncr2_factory_board_set_indicator(
+                    (effect_enabled != UINT8_C(0))
+                        ? NCR2_LED_RED
+                        : NCR2_LED_OFF);
+            } else if (
+                footswitch_event == NCR2_FOOTSWITCH_EVENT_HOLD) {
+                const uint8_t factory_engine =
+                    (uint8_t)(
+                        g_hardware_app_effect_index / UINT32_C(2));
+
+                /* Silence and bypass before announcing the selected bank. */
+                ncr2_factory_board_set_relay(UINT8_C(0));
+                g_hardware_app_enable_effect = UINT32_C(0);
+                ncr2_factory_board_set_indicator(NCR2_LED_OFF);
+                flash_code(
+                    NCR2_LED_BOTH,
+                    (uint32_t)factory_engine + UINT32_C(1));
+                reset_into_factory_engine(factory_engine);
             }
             if (g_hardware_app_knob_adc_ready != UINT32_C(0)) {
                 (void)sample_knobs(UINT8_C(0));
