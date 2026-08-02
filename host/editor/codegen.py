@@ -83,7 +83,7 @@ for _effect_id, _id_macro in (
         "header": "effects_instrument.h",
         "id": _id_macro,
         "parameters": {
-            1: "EFFECT_INSTRUMENT_PARAMETER_ARTICULATION",
+            1: "EFFECT_INSTRUMENT_PARAMETER_TRANSFORMATION",
             2: "EFFECT_INSTRUMENT_PARAMETER_CHARACTER",
             3: "EFFECT_INSTRUMENT_PARAMETER_MIX",
             4: "EFFECT_INSTRUMENT_PARAMETER_SENSITIVITY",

@@ -20,6 +20,7 @@ import hashlib
 import io
 import json
 import re
+import secrets
 import struct
 import sys
 import threading
@@ -138,6 +139,14 @@ class EditorSession:
         self.lock = threading.Lock()
         self._inputs: dict[str, bytes] = {}
         self._order: list[str] = []
+        self.live: builder_module.LiveProcess | None = None
+        self.live_token: str | None = None
+
+    def stop_live_locked(self) -> None:
+        if self.live is not None:
+            self.live.stop()
+        self.live = None
+        self.live_token = None
 
     def remember_input(self, payload: bytes) -> str:
         digest = hashlib.sha256(payload).hexdigest()
@@ -315,6 +324,12 @@ class EditorHandler(BaseHTTPRequestHandler):
                 self._handle_verify()
             elif path == "/api/render":
                 self._handle_render()
+            elif path == "/api/live/start":
+                self._handle_live_start()
+            elif path == "/api/live/chunk":
+                self._handle_live_chunk()
+            elif path == "/api/live/stop":
+                self._handle_live_stop()
             elif path == "/api/export":
                 self._handle_export()
             elif path == "/api/visual-source":
@@ -542,6 +557,83 @@ class EditorHandler(BaseHTTPRequestHandler):
             },
             rendered.audio,
         )
+
+    def _handle_live_start(self) -> None:
+        request = json.loads(self._read_body() or b"{}")
+        result, sources = self._session_payload(request, False)
+        build: builder_module.BuildResult = result["build"]
+        payload: dict[str, Any] = {
+            "build": build.as_dict(),
+            "lint": rt_rules.scan_sources(sources),
+        }
+        if not build.ok or build.binary is None:
+            payload["error"] = "live preview build failed"
+            self._send_json(payload, 400)
+            return
+        overrides = [
+            (int(item[0]), int(item[1]), float(item[2]))
+            for item in request.get("overrides", ())
+        ]
+        with self.session.lock:
+            self.session.stop_live_locked()
+            live = self.session.builder.start_live(
+                build.binary,
+                int(request.get("sample_rate", 48000)),
+                int(request.get("block_frames", 64)),
+                int(request.get("channels", 2)),
+                overrides,
+            )
+            token = secrets.token_hex(16)
+            self.session.live = live
+            self.session.live_token = token
+        payload.update(
+            {
+                "status": "ready",
+                "token": token,
+                "sample_rate": int(request.get("sample_rate", 48000)),
+                "block_frames": int(request.get("block_frames", 64)),
+                "channels": int(request.get("channels", 2)),
+            }
+        )
+        self._send_json(payload)
+
+    def _handle_live_chunk(self) -> None:
+        body = self._read_body()
+        if len(body) < FRAME_HEADER.size:
+            raise ValueError("truncated live preview request")
+        (header_length,) = FRAME_HEADER.unpack_from(body, 0)
+        start = FRAME_HEADER.size
+        if start + header_length > len(body):
+            raise ValueError("truncated live preview header")
+        request = json.loads(body[start:start + header_length].decode())
+        audio = body[start + header_length:]
+        token = str(request.get("token") or "")
+        with self.session.lock:
+            if (
+                self.session.live is None
+                or not token
+                or token != self.session.live_token
+            ):
+                self._send_frame(
+                    {"status": "not-running", "error": "live preview expired"},
+                    b"",
+                )
+                return
+            try:
+                rendered = self.session.live.process_audio(audio)
+            except builder_module.BuildError:
+                self.session.stop_live_locked()
+                raise
+        self._send_frame({"status": "ok"}, rendered)
+
+    def _handle_live_stop(self) -> None:
+        request = json.loads(self._read_body() or b"{}")
+        token = str(request.get("token") or "")
+        with self.session.lock:
+            stopped = bool(token and token == self.session.live_token)
+            if stopped:
+                self.session.stop_live_locked()
+        self._send_json({"status": "stopped", "matched": stopped})
 
     def _handle_export(self) -> None:
         request = json.loads(self._read_body() or b"{}")

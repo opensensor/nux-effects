@@ -211,6 +211,9 @@
         <div class="panel-head">
           <h2 id="preview-title">Preview</h2>
           <div class="transport">
+            <button type="button" id="live-input" class="ghost small">
+              Play live input
+            </button>
             <button type="button" id="play" class="primary small">
               Play
             </button>
@@ -232,7 +235,7 @@
               <option value="noise">Noise burst</option>
               <option value="impulse">Impulse</option>
               <option value="file">Your guitar recording…</option>
-              <option value="mic">Record 2 s from guitar / audio input…</option>
+              <option value="mic">Record 6 s from guitar / audio input…</option>
             </select>
           </label>
           <label class="level">
@@ -241,13 +244,13 @@
               id="input-level"
               type="range"
               min="-30"
-              max="0"
+              max="18"
               step="1"
-              value="-6"
+              value="0"
             />
           </label>
           <label class="toggle level-match-toggle">
-            <input type="checkbox" id="level-match" checked />
+            <input type="checkbox" id="level-match" />
             <span>
               <b>Level-match audition</b>
               <em id="level-match-note">Playback only; measurements remain raw.</em>
@@ -257,14 +260,17 @@
         </div>
 
         <aside class="live-preview-note">
-          <b>Live playing:</b>
+          <b>Stateful native live playing:</b>
           <span>
-            Open Recover USB is an updater, not an audio interface. Today this
-            page can record a two-second take from an audio interface; an
-            installed open engine still processes the pedal's analog input in
-            real time. Normal-mode USB parameter control is the next firmware
-            transport.
+            Connect the guitar through a computer audio interface and use
+            headphones to avoid feedback. Each chunk runs through one
+            persistent instance of the real firmware C, so pitch history,
+            envelopes, delays, and control changes are preserved. Open Recover
+            USB remains an updater rather than an audio interface.
           </span>
+          <em id="live-input-state">
+            Use headphones or a muted monitor path to prevent feedback.
+          </em>
         </aside>
 
         <figure class="chart">

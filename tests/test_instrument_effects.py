@@ -23,7 +23,7 @@ class InstrumentEffectsTests(unittest.TestCase):
 int main(void)
 {
     effect_instance_t instance;
-    _Alignas(16) uint8_t arena[4096];
+    _Alignas(16) uint8_t arena[8192];
     effect_chain_t chain;
     float mono[64];
     effect_audio_block_t block = {
@@ -87,6 +87,16 @@ int main(void)
             }
         }
         if (energy < 1.0F) return 9;
+        {
+            effect_instrument_note_state_t note;
+            if (ncr2_instrument_get_note_state(
+                    &chain.instances[index], &note) !=
+                EFFECT_RUNTIME_OK) return 10;
+            if (note.active == 0U || note.midi_note != 57U) return 11;
+            if (note.frequency_hz < 205.0F ||
+                note.frequency_hz > 235.0F ||
+                note.confidence < 0.6F) return 12;
+        }
         effect_chain_clear(&chain);
     }
     return 0;

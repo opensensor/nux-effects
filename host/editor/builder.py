@@ -16,10 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import resource
+import select
 import shutil
 import subprocess
+import struct
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -60,6 +64,10 @@ DEFAULT_COMPILE_TIMEOUT = 30.0
 DEFAULT_RUN_TIMEOUT = 20.0
 DEFAULT_ADDRESS_SPACE_BYTES = 1024 * 1024 * 1024
 DEFAULT_CPU_SECONDS = 15
+STREAM_MAGIC = 0x45564C31
+STREAM_READY = struct.Struct("<IIII")
+STREAM_LENGTH = struct.Struct("<I")
+EFFECT_RUNTIME_OK_VALUE = 0
 
 
 class BuildError(RuntimeError):
@@ -122,6 +130,83 @@ class RunResult:
             "report": self.report,
             "error": self.error,
         }
+
+
+class LiveProcess:
+    """Persistent native preview retaining firmware DSP state per chunk."""
+
+    def __init__(
+        self,
+        process: subprocess.Popen[bytes],
+        channels: int,
+        block_frames: int,
+    ) -> None:
+        self.process = process
+        self.channels = channels
+        self.block_frames = block_frames
+
+    def _read_exact(self, size: int, timeout: float) -> bytes:
+        if self.process.stdout is None:
+            raise BuildError("live preview has no output pipe")
+        deadline = time.monotonic() + timeout
+        chunks: list[bytes] = []
+        completed = 0
+        while completed < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise BuildError("live preview chunk timed out")
+            ready, _, _ = select.select(
+                [self.process.stdout.fileno()], [], [], remaining
+            )
+            if not ready:
+                raise BuildError("live preview chunk timed out")
+            chunk = os.read(
+                self.process.stdout.fileno(), size - completed
+            )
+            if not chunk:
+                raise BuildError("live preview process stopped")
+            chunks.append(chunk)
+            completed += len(chunk)
+        return b"".join(chunks)
+
+    def process_audio(self, audio: bytes, timeout: float = 2.0) -> bytes:
+        frame_bytes = 4 * self.channels
+        if not audio or len(audio) % frame_bytes != 0:
+            raise BuildError("live audio is not complete float32 frames")
+        if self.process.poll() is not None or self.process.stdin is None:
+            raise BuildError("live preview process is not running")
+        try:
+            self.process.stdin.write(STREAM_LENGTH.pack(len(audio)))
+            self.process.stdin.write(audio)
+            self.process.stdin.flush()
+            (length,) = STREAM_LENGTH.unpack(
+                self._read_exact(STREAM_LENGTH.size, timeout)
+            )
+            if length != len(audio):
+                raise BuildError("live preview returned the wrong chunk size")
+            return self._read_exact(length, timeout)
+        except (BrokenPipeError, OSError) as error:
+            raise BuildError(f"live preview transport failed: {error}") from error
+
+    def stop(self) -> None:
+        if self.process.poll() is None and self.process.stdin is not None:
+            try:
+                self.process.stdin.write(STREAM_LENGTH.pack(0))
+                self.process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+        try:
+            self.process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=1.0)
+        for pipe in (
+            self.process.stdin,
+            self.process.stdout,
+            self.process.stderr,
+        ):
+            if pipe is not None:
+                pipe.close()
 
 
 def parse_diagnostics(log: str) -> tuple[Diagnostic, ...]:
@@ -414,3 +499,51 @@ class EffectBuilder:
             audio=completed.stdout,
             error=error,
         )
+
+    def start_live(
+        self,
+        binary: Path,
+        sample_rate: int,
+        block_frames: int,
+        channels: int,
+        overrides: Sequence[tuple[int, int, float]] = (),
+        timeout: float = 3.0,
+    ) -> LiveProcess:
+        arguments = [
+            "--stream",
+            "--sample-rate",
+            str(int(sample_rate)),
+            "--block-frames",
+            str(int(block_frames)),
+            "--channels",
+            str(int(channels)),
+        ]
+        for node, parameter_id, value in overrides:
+            arguments.extend(
+                ["--set", f"{int(node)}:{int(parameter_id)}:{float(value)!r}"]
+            )
+        process = subprocess.Popen(
+            [str(binary), *arguments],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            preexec_fn=_apply_limits,
+        )
+        live = LiveProcess(process, int(channels), int(block_frames))
+        try:
+            magic, status, ready_channels, ready_frames = STREAM_READY.unpack(
+                live._read_exact(STREAM_READY.size, timeout)
+            )
+            if magic != STREAM_MAGIC:
+                raise BuildError("live preview returned an invalid handshake")
+            if status != EFFECT_RUNTIME_OK_VALUE:
+                raise BuildError(
+                    f"firmware runtime rejected live preview ({status})"
+                )
+            if ready_channels != int(channels) or ready_frames != int(block_frames):
+                raise BuildError("live preview format handshake did not match")
+            return live
+        except Exception:
+            live.stop()
+            raise

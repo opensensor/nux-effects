@@ -102,7 +102,7 @@ const state = {
   blockFrames: 64,
   channels: 2,
   signal: "guitar",
-  inputLevelDb: -6,
+  inputLevelDb: 0,
   input: null,
   inputDigest: null,
   output: null,
@@ -112,7 +112,7 @@ const state = {
   report: null,
   build: null,
   monitor: "wet",
-  levelMatch: true,
+  levelMatch: false,
   playing: false,
   userAudio: null,
   guitarBytes: null,
@@ -352,9 +352,9 @@ function applyEngineBankDocument(document) {
     "guitar", "pluck", "chord", "sine", "sweep", "noise", "impulse",
   ].includes(workspace.signal) ? workspace.signal : "guitar";
   state.inputLevelDb = Number.isFinite(Number(workspace.input_level_db))
-    ? Math.max(-30, Math.min(0, Number(workspace.input_level_db)))
-    : -6;
-  state.levelMatch = workspace.level_match !== false;
+    ? Math.max(-30, Math.min(18, Number(workspace.input_level_db)))
+    : 0;
+  state.levelMatch = workspace.level_match === true;
   state.program = state.openEngines[state.activeOpenEngine]
     .effects[state.activeEffectPosition];
   state.includeHardwareApp = state.openEngines.some((engine) =>
@@ -425,14 +425,14 @@ function sessionRequest(extra = {}) {
   };
 }
 
-async function postRender(request, payload) {
+async function postFrame(path, request, payload) {
   const header = new TextEncoder().encode(JSON.stringify(request));
   const body = new Uint8Array(4 + header.length + (payload?.byteLength ?? 0));
   new DataView(body.buffer).setUint32(0, header.length, true);
   body.set(header, 4);
   if (payload) body.set(new Uint8Array(payload), 4 + header.length);
 
-  const response = await fetch("/api/render", {
+  const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
     body,
@@ -451,6 +451,10 @@ async function postRender(request, payload) {
     ? new Float32Array(buffer.slice(4 + length))
     : new Float32Array(0);
   return { meta, audio };
+}
+
+async function postRender(request, payload) {
+  return postFrame("/api/render", request, payload);
 }
 
 /** Render through the host, sending the payload only when it is new. */
@@ -598,7 +602,7 @@ async function prepareInput() {
   state.rampDigest = await digestOf(state.ramp.buffer);
 }
 
-async function decodeUserAudio(arrayBuffer) {
+async function decodeUserAudio(arrayBuffer, normalizePeak = false) {
   const context = new OfflineAudioContext(1, 1, state.sampleRate);
   const decoded = await context.decodeAudioData(arrayBuffer);
   const frames = Math.min(decoded.length, state.sampleRate * 6);
@@ -609,7 +613,7 @@ async function decodeUserAudio(arrayBuffer) {
       mono[index] += data[index] / decoded.numberOfChannels;
     }
   }
-  return normalize(mono);
+  return normalizePeak ? normalize(mono) : mono;
 }
 
 async function loadBundledGuitar() {
@@ -623,8 +627,16 @@ async function loadBundledGuitar() {
   state.guitarAudio = await decodeUserAudio(state.guitarBytes.slice(0));
 }
 
-async function captureMicrophone(seconds = 2.0) {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+async function captureMicrophone(seconds = 6.0) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      autoGainControl: false,
+      echoCancellation: false,
+      noiseSuppression: false,
+      channelCount: 1,
+      sampleRate: state.sampleRate,
+    },
+  });
   const context = new AudioContext({ sampleRate: state.sampleRate });
   const source = context.createMediaStreamSource(stream);
   const processorFrames = 4096;
@@ -644,18 +656,263 @@ async function captureMicrophone(seconds = 2.0) {
         capture.disconnect();
         stream.getTracks().forEach((track) => track.stop());
         context.close();
-        const mono = new Float32Array(captured);
+        const mono = new Float32Array(target);
         let offset = 0;
         for (const chunk of chunks) {
-          mono.set(chunk, offset);
-          offset += chunk.length;
+          const remaining = target - offset;
+          if (remaining <= 0) break;
+          mono.set(chunk.subarray(0, remaining), offset);
+          offset += Math.min(chunk.length, remaining);
         }
-        resolve(normalize(mono));
+        resolve(mono);
       }
     };
     source.connect(capture);
     capture.connect(context.destination);
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Stateful native live input                                         */
+/* ------------------------------------------------------------------ */
+
+const livePreview = {
+  active: false,
+  starting: false,
+  restarting: false,
+  processing: false,
+  token: null,
+  generation: 0,
+  stream: null,
+  context: null,
+  source: null,
+  processor: null,
+  silent: null,
+  queue: [],
+  outputNodes: new Set(),
+  nextStart: 0,
+  dropped: 0,
+};
+let liveRestartTimer = null;
+
+function currentOverrides() {
+  return state.program.nodes.flatMap((node, index) =>
+    Object.entries(node.values).map(([id, value]) => [
+      index,
+      Number(id),
+      value,
+    ]));
+}
+
+function updateLivePreviewState(message = "") {
+  if (!dom.liveInput) return;
+  dom.liveInput.textContent = livePreview.active
+    ? "Stop live input"
+    : livePreview.starting
+      ? "Starting…"
+      : "Play live input";
+  dom.liveInput.disabled = livePreview.starting;
+  if (dom.liveInputState) {
+    dom.liveInputState.textContent = message || (livePreview.active
+      ? `Native DSP is live${livePreview.dropped
+        ? ` · ${livePreview.dropped} late chunk(s) dropped`
+        : ""}`
+      : "Use headphones or a muted monitor path to prevent feedback.");
+  }
+}
+
+async function startNativeLiveSession() {
+  const sampleRate = livePreview.context?.sampleRate ?? state.sampleRate;
+  const payload = await postJson("/api/live/start", sessionRequest({
+    sample_rate: sampleRate,
+    overrides: currentOverrides(),
+  }));
+  livePreview.token = payload.token;
+  livePreview.generation += 1;
+  livePreview.queue = [];
+  return payload;
+}
+
+function scheduleLiveAudio(interleaved) {
+  const context = livePreview.context;
+  if (!context || !livePreview.active) return;
+  const frames = Math.floor(interleaved.length / state.channels);
+  if (frames === 0) return;
+  const buffer = context.createBuffer(
+    state.channels,
+    frames,
+    context.sampleRate,
+  );
+  for (let channel = 0; channel < state.channels; channel += 1) {
+    const output = buffer.getChannelData(channel);
+    for (let frame = 0; frame < frames; frame += 1) {
+      output[frame] = interleaved[frame * state.channels + channel];
+    }
+  }
+  const node = context.createBufferSource();
+  node.buffer = buffer;
+  node.connect(context.destination);
+  const earliest = context.currentTime + 0.035;
+  if (livePreview.nextStart < context.currentTime - 0.05) {
+    livePreview.nextStart = earliest;
+  }
+  const startsAt = Math.max(earliest, livePreview.nextStart);
+  node.start(startsAt);
+  livePreview.nextStart = startsAt + buffer.duration;
+  livePreview.outputNodes.add(node);
+  node.addEventListener("ended", () => {
+    livePreview.outputNodes.delete(node);
+    node.disconnect();
+  }, { once: true });
+}
+
+async function pumpLivePreview() {
+  if (!livePreview.active || livePreview.restarting ||
+      livePreview.processing || livePreview.queue.length === 0) return;
+  livePreview.processing = true;
+  const item = livePreview.queue.shift();
+  try {
+    const result = await postFrame(
+      "/api/live/chunk",
+      { token: livePreview.token },
+      item.audio.buffer,
+    );
+    if (result.meta.status !== "ok") {
+      throw new Error(result.meta.error || "live DSP stopped");
+    }
+    if (livePreview.active && item.generation === livePreview.generation) {
+      scheduleLiveAudio(result.audio);
+    }
+  } catch (error) {
+    setStatus(`live input stopped: ${error.message}`, "error");
+    await stopLivePreview(true);
+  } finally {
+    livePreview.processing = false;
+    if (livePreview.active) pumpLivePreview();
+  }
+}
+
+function enqueueLiveInput(mono) {
+  const gain = Math.pow(10, state.inputLevelDb / 20);
+  const audio = interleave(mono, state.channels, gain);
+  while (livePreview.queue.length >= 3) {
+    livePreview.queue.shift();
+    livePreview.dropped += 1;
+  }
+  livePreview.queue.push({
+    audio,
+    generation: livePreview.generation,
+  });
+  updateLivePreviewState();
+  pumpLivePreview();
+}
+
+async function startLivePreview() {
+  if (livePreview.active || livePreview.starting) return;
+  livePreview.starting = true;
+  updateLivePreviewState("Requesting the raw instrument input…");
+  try {
+    livePreview.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+        channelCount: 1,
+        sampleRate: state.sampleRate,
+      },
+    });
+    livePreview.context = new AudioContext({ sampleRate: state.sampleRate });
+    await livePreview.context.resume();
+    await startNativeLiveSession();
+    livePreview.source = livePreview.context.createMediaStreamSource(
+      livePreview.stream,
+    );
+    livePreview.processor = livePreview.context.createScriptProcessor(
+      1024,
+      1,
+      1,
+    );
+    livePreview.silent = livePreview.context.createGain();
+    livePreview.silent.gain.value = 0;
+    livePreview.processor.onaudioprocess = (event) => {
+      if (!livePreview.active) return;
+      enqueueLiveInput(new Float32Array(
+        event.inputBuffer.getChannelData(0),
+      ));
+    };
+    livePreview.source.connect(livePreview.processor);
+    livePreview.processor.connect(livePreview.silent);
+    livePreview.silent.connect(livePreview.context.destination);
+    livePreview.active = true;
+    livePreview.nextStart = livePreview.context.currentTime + 0.05;
+    livePreview.dropped = 0;
+    setStatus("live guitar is running through the native firmware DSP", "ok");
+    updateLivePreviewState("Move a control; the native session reloads it after 450 ms.");
+  } catch (error) {
+    await stopLivePreview(true);
+    throw error;
+  } finally {
+    livePreview.starting = false;
+    updateLivePreviewState();
+  }
+}
+
+async function restartLivePreview() {
+  if (!livePreview.active || livePreview.restarting) return;
+  livePreview.restarting = true;
+  updateLivePreviewState("Applying controls to a fresh native DSP session…");
+  try {
+    await startNativeLiveSession();
+    livePreview.nextStart = livePreview.context.currentTime + 0.04;
+    setStatus("live controls applied", "ok");
+  } catch (error) {
+    setStatus(`could not update live DSP: ${error.message}`, "error");
+    await stopLivePreview(true);
+  } finally {
+    livePreview.restarting = false;
+    updateLivePreviewState();
+    pumpLivePreview();
+  }
+}
+
+function scheduleLiveRestart() {
+  window.clearTimeout(liveRestartTimer);
+  liveRestartTimer = window.setTimeout(restartLivePreview, 450);
+}
+
+async function stopLivePreview(notifyServer = true) {
+  window.clearTimeout(liveRestartTimer);
+  const token = livePreview.token;
+  livePreview.active = false;
+  livePreview.generation += 1;
+  livePreview.queue = [];
+  if (livePreview.processor) {
+    livePreview.processor.onaudioprocess = null;
+    livePreview.processor.disconnect();
+  }
+  if (livePreview.source) livePreview.source.disconnect();
+  if (livePreview.silent) livePreview.silent.disconnect();
+  livePreview.outputNodes.forEach((node) => {
+    try { node.stop(); } catch (error) { /* already stopped */ }
+    node.disconnect();
+  });
+  livePreview.outputNodes.clear();
+  livePreview.stream?.getTracks().forEach((track) => track.stop());
+  if (livePreview.context) {
+    await livePreview.context.close().catch(() => {});
+  }
+  if (notifyServer && token) {
+    await postJson("/api/live/stop", { token }).catch(() => {});
+  }
+  livePreview.token = null;
+  livePreview.stream = null;
+  livePreview.context = null;
+  livePreview.source = null;
+  livePreview.processor = null;
+  livePreview.silent = null;
+  livePreview.processing = false;
+  livePreview.restarting = false;
+  updateLivePreviewState();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1269,6 +1526,10 @@ function showLint(findings) {
 }
 
 function scheduleRender() {
+  if (livePreview.active) {
+    scheduleLiveRestart();
+    return;
+  }
   window.clearTimeout(renderTimer);
   renderTimer = window.setTimeout(() => {
     runRender().catch((error) => setStatus(String(error.message), "error"));
@@ -1602,6 +1863,12 @@ function loadEnginePack() {
   state.activeOpenEngine = engineIndex;
   state.activeEffectPosition = 0;
   state.program = engine.effects[0];
+  /* Instrument Lab must be judged at its raw device gain. The first
+     hardware trial sounded deceptively controlled only because browser
+     auditioning attenuated its much hotter output. */
+  state.levelMatch = false;
+  dom.levelMatch.checked = false;
+  updateLevelMatchNote();
   query("program-name").value = state.program.name;
   query("program-id").value = formatHex(state.program.programId);
   renderEngineBank();
@@ -2376,7 +2643,7 @@ async function changeSignal() {
     return;
   }
   if (state.signal === "mic") {
-    setStatus("recording 2 s from the microphone…", "busy");
+    setStatus("recording 6 s from the raw instrument input…", "busy");
     try {
       state.userAudio = await captureMicrophone();
       setStatus("captured microphone input", "ok");
@@ -2406,6 +2673,8 @@ function bind() {
   dom.deleteSource = query("delete-source");
   dom.play = query("play");
   dom.ab = query("ab");
+  dom.liveInput = query("live-input");
+  dom.liveInputState = query("live-input-state");
   dom.signal = query("signal");
   dom.fileInput = query("file-input");
   dom.sampleRate = query("sample-rate");
@@ -2570,6 +2839,19 @@ function bind() {
     else startPlayback(0);
   });
 
+  dom.liveInput.addEventListener("click", () => {
+    if (livePreview.active) {
+      stopLivePreview().then(() => {
+        setStatus("live input stopped", "ok");
+        scheduleRender();
+      });
+    } else {
+      startLivePreview().catch((error) => {
+        setStatus(`live input unavailable: ${error.message}`, "error");
+      });
+    }
+  });
+
   dom.ab.addEventListener("click", () => {
     state.monitor = state.monitor === "wet" ? "dry" : "wet";
     applyMonitor();
@@ -2655,6 +2937,16 @@ function bind() {
     drawAll();
   });
 
+  window.addEventListener("beforeunload", () => {
+    if (!livePreview.token) return;
+    fetch("/api/live/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: livePreview.token }),
+      keepalive: true,
+    }).catch(() => {});
+  });
+
   document.addEventListener("keydown", (event) => {
     const typing = ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(
       document.activeElement?.tagName,
@@ -2702,6 +2994,7 @@ async function start() {
   renderSourceList();
   updateMetrics(null);
   updateLevelMatchNote();
+  updateLivePreviewState();
 
   try {
     [state.session, state.visualCatalog] = await Promise.all([

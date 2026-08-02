@@ -575,6 +575,7 @@ main {
 
 .live-preview-note {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin: 7px 0;
   padding: 7px 9px;
@@ -589,6 +590,12 @@ main {
 .live-preview-note b {
   flex: 0 0 auto;
   color: var(--text-primary);
+}
+
+.live-preview-note em {
+  flex: 1 0 100%;
+  color: var(--text-muted);
+  font-style: normal;
 }
 
 @media (max-width: 900px) {

@@ -13,6 +13,7 @@
  * Modes:
  *   --catalog   describe the registry as JSON on stdout
  *   --verify    validate registry/catalog/library/program, JSON on stdout
+ *   --stream    retain effect state while processing length-framed chunks
  *   (default)   read float32 frames on stdin, write processed float32 on
  *               stdout, and write the JSON report on stderr
  */
@@ -41,6 +42,8 @@
 
 #define EDITOR_MAX_OVERRIDES 256
 #define EDITOR_READ_CHUNK (64U * 1024U)
+#define EDITOR_STREAM_MAGIC UINT32_C(0x45564c31)
+#define EDITOR_STREAM_MAX_BYTES (4U * 1024U * 1024U)
 
 extern const effect_registry_t editor_registry;
 extern const program_descriptor_t editor_program;
@@ -282,6 +285,149 @@ static float *read_stdin_frames(size_t *sample_count)
     return (float *)buffer;
 }
 
+static int stream_read_exact(void *buffer, size_t bytes)
+{
+    unsigned char *destination = (unsigned char *)buffer;
+    size_t completed = 0U;
+
+    while (completed < bytes) {
+        size_t count = fread(
+            &destination[completed], 1U, bytes - completed, stdin);
+
+        if (count == 0U) return -1;
+        completed += count;
+    }
+    return 0;
+}
+
+static uint16_t stream_process_samples(
+    effect_chain_t *chain,
+    float *interleaved,
+    size_t frame_count,
+    uint32_t block_frames,
+    uint8_t channel_count,
+    float channel_storage[EFFECT_RUNTIME_MAX_CHANNELS][4096],
+    effect_audio_block_t *block)
+{
+    for (size_t offset = 0U; offset < frame_count;) {
+        size_t frames = frame_count - offset;
+
+        if (frames > (size_t)block_frames) {
+            frames = (size_t)block_frames;
+        }
+        for (uint8_t channel = UINT8_C(0);
+             channel < channel_count;
+             ++channel) {
+            block->channels[channel] = channel_storage[channel];
+            for (size_t frame = 0U; frame < frames; ++frame) {
+                float sample = interleaved[
+                    (offset + frame) * (size_t)channel_count +
+                    (size_t)channel];
+
+                channel_storage[channel][frame] =
+                    value_is_finite(sample) ? sample : 0.0F;
+            }
+        }
+        block->frame_count = (uint32_t)frames;
+        block->channel_count = channel_count;
+        {
+            const uint16_t status = effect_chain_process(chain, block);
+
+            if (status != EFFECT_RUNTIME_OK) return status;
+        }
+        for (uint8_t channel = UINT8_C(0);
+             channel < channel_count;
+             ++channel) {
+            for (size_t frame = 0U; frame < frames; ++frame) {
+                float sample = channel_storage[channel][frame];
+
+                if (!value_is_finite(sample)) sample = 0.0F;
+                interleaved[
+                    (offset + frame) * (size_t)channel_count +
+                    (size_t)channel] = sample;
+            }
+        }
+        offset += frames;
+    }
+    return EFFECT_RUNTIME_OK;
+}
+
+static int run_stream(
+    effect_chain_t *chain,
+    uint16_t ready_status,
+    uint32_t block_frames,
+    uint8_t channel_count,
+    float channel_storage[EFFECT_RUNTIME_MAX_CHANNELS][4096],
+    effect_audio_block_t *block)
+{
+    const uint32_t ready[4] = {
+        EDITOR_STREAM_MAGIC,
+        (uint32_t)ready_status,
+        (uint32_t)channel_count,
+        block_frames,
+    };
+    float *payload = NULL;
+    size_t capacity = 0U;
+
+    if (fwrite(ready, sizeof(ready), 1U, stdout) != 1U) return 4;
+    fflush(stdout);
+    if (ready_status != EFFECT_RUNTIME_OK) return 5;
+
+    for (;;) {
+        uint32_t payload_bytes;
+        size_t frame_count;
+        uint16_t status;
+
+        if (fread(&payload_bytes, sizeof(payload_bytes), 1U, stdin) != 1U) {
+            break;
+        }
+        if (payload_bytes == UINT32_C(0)) break;
+        if (payload_bytes > EDITOR_STREAM_MAX_BYTES ||
+            payload_bytes %
+                (sizeof(float) * (size_t)channel_count) != 0U) {
+            free(payload);
+            return 6;
+        }
+        if ((size_t)payload_bytes > capacity) {
+            float *replacement = (float *)realloc(payload, payload_bytes);
+
+            if (replacement == NULL) {
+                free(payload);
+                return 7;
+            }
+            payload = replacement;
+            capacity = (size_t)payload_bytes;
+        }
+        if (stream_read_exact(payload, (size_t)payload_bytes) != 0) {
+            free(payload);
+            return 8;
+        }
+        frame_count = (size_t)payload_bytes /
+            (sizeof(float) * (size_t)channel_count);
+        status = stream_process_samples(
+            chain,
+            payload,
+            frame_count,
+            block_frames,
+            channel_count,
+            channel_storage,
+            block);
+        if (status != EFFECT_RUNTIME_OK) {
+            free(payload);
+            return 9;
+        }
+        if (fwrite(&payload_bytes, sizeof(payload_bytes), 1U, stdout) != 1U ||
+            fwrite(payload, 1U, (size_t)payload_bytes, stdout) !=
+                (size_t)payload_bytes) {
+            free(payload);
+            return 10;
+        }
+        fflush(stdout);
+    }
+    free(payload);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     uint32_t sample_rate = UINT32_C(48000);
@@ -289,6 +435,7 @@ int main(int argc, char **argv)
     uint8_t channel_count = UINT8_C(2);
     int catalog_mode = 0;
     int verify_mode = 0;
+    int stream_mode = 0;
     uint16_t registry_status;
     uint16_t catalog_status;
     uint16_t library_status;
@@ -319,6 +466,8 @@ int main(int argc, char **argv)
             catalog_mode = 1;
         } else if (strcmp(argument, "--verify") == 0) {
             verify_mode = 1;
+        } else if (strcmp(argument, "--stream") == 0) {
+            stream_mode = 1;
         } else if (strcmp(argument, "--sample-rate") == 0 &&
                    index + 1 < argc) {
             sample_rate = (uint32_t)strtoul(argv[++index], NULL, 10);
@@ -381,6 +530,23 @@ int main(int argc, char **argv)
         chain.count = 0U;
         chain.arena_used = 0U;
         chain.instances = instances;
+    }
+
+    if (stream_mode) {
+        uint16_t ready_status = registry_status;
+
+        if (ready_status == EFFECT_RUNTIME_OK) ready_status = catalog_status;
+        if (ready_status == EFFECT_RUNTIME_OK) ready_status = library_status;
+        if (ready_status == EFFECT_RUNTIME_OK) ready_status = chain_status;
+        if (ready_status == EFFECT_RUNTIME_OK) ready_status = prepare_status;
+        if (ready_status == EFFECT_RUNTIME_OK) ready_status = parameter_status;
+        return run_stream(
+            &chain,
+            ready_status,
+            block_frames,
+            channel_count,
+            channel_storage,
+            &block);
     }
 
     if (!verify_mode &&

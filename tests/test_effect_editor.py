@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import math
 import shutil
@@ -162,7 +163,7 @@ class CodegenTests(unittest.TestCase):
             "vendor_id": codegen.VENDOR_OPEN,
             "effect_id": 0x103,
             "parameters": [
-                {"parameter_id": 1, "name": "Articulation"},
+                {"parameter_id": 1, "name": "Transformation"},
                 {"parameter_id": 3, "name": "Instrument mix"},
             ],
         }
@@ -180,7 +181,7 @@ class CodegenTests(unittest.TestCase):
         source = codegen.generate_program_source(program, [effect])
         self.assertIn('#include "effects_instrument.h"', source)
         self.assertIn("EFFECT_OPEN_TONEWHEEL_ORGAN_ID", source)
-        self.assertIn("EFFECT_INSTRUMENT_PARAMETER_ARTICULATION", source)
+        self.assertIn("EFFECT_INSTRUMENT_PARAMETER_TRANSFORMATION", source)
 
 
 class RealTimeRuleTests(unittest.TestCase):
@@ -322,6 +323,9 @@ class BrowserBankAndDfuTests(unittest.TestCase):
         self.assertIn('id="review-notes"', page)
         self.assertIn('id="import-bank"', page)
         self.assertIn('id="level-match"', page)
+        self.assertNotIn('id="level-match" checked', page)
+        self.assertIn('id="live-input"', page)
+        self.assertIn("Record 6 s from guitar / audio input", page)
         self.assertIn('value="guitar"', page)
         self.assertIn('id="dfu-connect"', page)
         self.assertIn('id="dfu-install"', page)
@@ -333,6 +337,9 @@ class BrowserBankAndDfuTests(unittest.TestCase):
         self.assertIn("version: 3", script)
         self.assertIn("WORKSPACE_STORAGE_KEY", script)
         self.assertIn("clean-guitar-di.wav", script)
+        self.assertIn("/api/live/start", script)
+        self.assertIn("/api/live/chunk", script)
+        self.assertIn("autoGainControl: false", script)
         self.assertIn('id="visual-designer"', page)
         self.assertIn('id="visual-palette"', page)
         self.assertIn('id="build-visual-effect"', page)
@@ -483,6 +490,27 @@ class HostRenderTests(unittest.TestCase):
             overrides=[(0, 1, 2.0), (1, 1, 6.0), (1, 2, 0.9)],
         )
         self.assertEqual(samples(baked.audio), samples(live.audio))
+
+    def test_stateful_live_process_accepts_sequential_native_chunks(self):
+        result = self.build(
+            [], codegen.ProgramSpec("Live gain", 12, (GAIN,)), bake=False
+        )
+        live = self.builder.start_live(
+            result.binary,
+            48000,
+            64,
+            1,
+            overrides=[(0, 1, 2.0)],
+        )
+        try:
+            first = live.process_audio(struct.pack("<ff", 0.2, -0.1))
+            second = live.process_audio(struct.pack("<ff", 0.05, -0.25))
+        finally:
+            live.stop()
+        self.assertEqual(
+            [round(value, 6) for value in samples(first + second)],
+            [0.4, -0.2, 0.1, -0.5],
+        )
 
     def test_out_of_range_parameters_are_rejected_by_the_runtime(self):
         program = codegen.ProgramSpec("Gain", 1, (GAIN,))
@@ -711,6 +739,109 @@ class HostRenderTests(unittest.TestCase):
                 0.04,
                 (expected, best_frequency),
             )
+
+    def test_instrument_defaults_are_level_safe_on_real_clean_guitar(self):
+        recording = EDITOR / "static" / "audio" / "clean-guitar-di.wav"
+        with wave.open(str(recording), "rb") as source:
+            pcm = source.readframes(source.getnframes())
+        integer = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+        payload = struct.pack(
+            f"<{len(integer)}f", *(sample / 32768.0 for sample in integer)
+        )
+        fingerprints = set()
+        for effect_id in range(0x100, 0x108):
+            node = codegen.ProgramNode(codegen.VENDOR_OPEN, effect_id)
+            result = self.build(
+                [], codegen.ProgramSpec("Instrument", effect_id, (node,))
+            )
+            rendered = self.builder.render(
+                result.binary, payload, 48000, 64, 1
+            )
+            self.assertTrue(rendered.ok, rendered.error)
+            report = rendered.report
+            self.assertEqual(report["nonfinite_samples"], 0)
+            self.assertLessEqual(report["peak_output"], 0.7)
+            change = 20.0 * math.log10(
+                report["rms_output"] / report["rms_input"]
+            )
+            self.assertGreaterEqual(change, -9.0, effect_id)
+            self.assertLessEqual(change, 3.0, effect_id)
+            fingerprints.add(hashlib.sha256(rendered.audio).digest())
+        self.assertEqual(len(fingerprints), 8)
+
+    def test_transformation_macro_has_an_unmistakable_dry_to_voice_sweep(self):
+        frames = 48000
+        payload = struct.pack(
+            f"<{frames}f",
+            *(
+                0.16 * math.sin(2.0 * math.pi * 220.0 * frame / 48000.0)
+                for frame in range(frames)
+            ),
+        )
+        program = codegen.ProgramSpec(
+            "Organ macro",
+            13,
+            (codegen.ProgramNode(codegen.VENDOR_OPEN, 0x103),),
+        )
+        result = self.build([], program, bake=False)
+        dryish = self.builder.render(
+            result.binary,
+            payload,
+            48000,
+            64,
+            1,
+            overrides=[(0, 1, 0.0), (0, 3, 1.0), (0, 4, 0.003)],
+        )
+        transformed = self.builder.render(
+            result.binary,
+            payload,
+            48000,
+            64,
+            1,
+            overrides=[(0, 1, 1.0), (0, 3, 1.0), (0, 4, 0.003)],
+        )
+        dark = self.builder.render(
+            result.binary,
+            payload,
+            48000,
+            64,
+            1,
+            overrides=[
+                (0, 1, 1.0), (0, 2, 0.0), (0, 3, 1.0), (0, 4, 0.003)
+            ],
+        )
+        bright = self.builder.render(
+            result.binary,
+            payload,
+            48000,
+            64,
+            1,
+            overrides=[
+                (0, 1, 1.0), (0, 2, 1.0), (0, 3, 1.0), (0, 4, 0.003)
+            ],
+        )
+        source_samples = samples(payload)
+
+        def difference(rendered):
+            return sum(
+                abs(output - original)
+                for output, original in zip(
+                    samples(rendered.audio)[-12000:],
+                    source_samples[-12000:],
+                )
+            )
+
+        self.assertGreater(
+            difference(transformed), difference(dryish) * 5.0
+        )
+        character_difference = math.sqrt(sum(
+            (low - high) ** 2
+            for low, high in zip(
+                samples(dark.audio)[-12000:],
+                samples(bright.audio)[-12000:],
+            )
+        ) / 12000)
+        self.assertGreater(character_difference, 0.02)
 
 
 @unittest.skipUnless(

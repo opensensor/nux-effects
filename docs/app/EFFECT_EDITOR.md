@@ -57,12 +57,16 @@ six-second, 48 kHz mono excerpt from the CC0 GuitarJam dataset: a clean
 electric guitar recorded directly into an audio interface. It preserves real
 pick attacks, fret transitions, pickup harmonics, and playing dynamics. The
 older physical-model pluck and chord remain explicitly labeled diagnostic
-signals, while file and microphone capture allow testing a particular guitar
-and playing style.
+signals, while file capture, six-second raw microphone capture, and live audio
+interface input allow testing a particular guitar and playing style. Browser
+automatic gain control, echo cancellation, and noise suppression are requested
+off for both microphone paths, and captured or uploaded audio is not
+normalized. The Input trim is therefore an explicit part of the audition.
 
 Level-matched auditioning applies a bounded, peak-safe gain only in the Web
-Audio playback mixer. The output waveform, spectrum, transfer curve, peak,
-RMS, and exported parameter settings always describe the unmodified firmware
+Audio playback mixer. It is off by default, and loading Instrument Lab turns
+it off explicitly. The output waveform, spectrum, transfer curve, peak, RMS,
+and exported parameter settings always describe the unmodified firmware
 render. This keeps dry/wet comparisons honest without concealing an engine
 whose device level needs correction.
 
@@ -120,11 +124,19 @@ The generated configuration comes in two shapes:
 Both are the same code with the same validation; a host test asserts
 they render identical samples for the same settings.
 
-This is currently live *host parameter reuse*, not continuous live guitar
-monitoring. Selecting the microphone input records a two-second take and then
-runs the exact native firmware render. A guitar connected to an ordinary audio
-interface can therefore be auditioned repeatedly, but the browser is not yet
-an AudioWorklet signal processor.
+The **Play live input** control provides continuous guitar monitoring through
+the native firmware C. The browser asks for the raw mono audio-interface input,
+sends bounded 1024-frame chunks to a persistent native process on localhost,
+and schedules the returned audio for playback. The process retains tracker,
+delay, envelope, and oscillator state between chunks. This is deliberately the
+same compiled effect chain as offline preview, not a JavaScript approximation.
+Moving an effect control replaces the native session after a short debounce.
+
+This localhost round trip is an audition path, not a stage monitor: it has more
+latency than the pedal and may drop old chunks rather than build an ever-growing
+queue. Use headphones or mute the direct monitor path to prevent acoustic
+feedback. Closing the page or pressing **Stop live input** terminates the native
+process and releases the audio device.
 
 The pedal's Open Recover HID interface cannot provide live playing: recovery
 mode deliberately does not initialize the analog audio engine, and its USB

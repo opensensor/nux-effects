@@ -1,6 +1,7 @@
 # Instrument Lab engine pack
 
-Status: host-preview prototype. It is not part of the v0.24 hardware image.
+Status: rebuilt host-preview prototype. It is not part of the v0.24 hardware
+image and has not been approved for another device trial.
 
 Instrument Lab adds a fifth, optional eight-program engine without removing
 the existing Open Amp Studio, Drive + Dynamics, Motion + Pitch, or Echo +
@@ -33,38 +34,63 @@ Instrument Lab image must not be approved without captured-pedal input tests,
 on-target deadline measurements, and explicit mappings for every editor
 control.
 
-## Signal model
+## Rebuilt signal model
 
 This is expressive resynthesis, not a cosmetic EQ preset. A bounded 4:1
-decimator (8:1 at 96 kHz) feeds a 512-sample AMDF pitch tracker. It searches
-guitar periods from roughly 65 Hz to 1.4 kHz, selects the first strong match
-to avoid octave-down errors, performs fractional-lag interpolation, and
-smooths accepted pitch changes. The detected continuous frequency drives each
-voice, so bends and vibrato survive instead of being forced onto an
-equal-tempered note grid.
+decimator, or 8:1 above 64 kHz, feeds a 512-sample tracker. The tracker uses a
+YIN-style cumulative normalized difference function over a 192-sample analysis
+window. It combines adaptive noise-floor gating, attack detection, octave
+continuity, and confirmation of large jumps before changing the stable pitch.
+The detected continuous frequency still carries bends and vibrato rather than
+forcing every sample onto an equal-tempered note grid.
 
-An envelope follower carries the player's dynamics into the synthesized
-voice. Articulation controls the voice-specific attack and release;
-Character changes oscillator balance and filtering; Instrument Mix blends
-resynthesis with the original guitar; Tracking Sensitivity sets the input
-gate. Oscillators use bounded saw, square, and continuous parabolic-sine
-primitives, followed by voice-specific filtering and a soft output bound.
+The resynthesizer no longer treats every instrument as a differently filtered
+saw or square oscillator. Bowed Ensemble, Cello, Violin, and Clarinet use a
+shared bounded waveguide with voice-specific excitation and damping. Organ,
+Brass, Bass, and Bell / Marimba use voice-specific additive partial models and
+percussive envelopes. Each voice has its own attack, release, excitation,
+partial balance, and speaker-friendly output filter.
 
-The implementation is allocation-free, uses about 2.3 KiB of effect context,
-contains no mutable file-scope DSP state, and needs no `libm` call in the audio
-path. The editor executes the firmware C directly. Current host measurements
-put a Bowed Ensemble preview at approximately 2–3% of one 48 kHz block
-deadline, but Cortex-M7 cycle measurement remains required before device
+The panel-facing controls are:
+
+- **Transformation**: a meaningful near-dry-to-resynthesized sweep;
+- **Character**: voice-specific brightness, bow pressure, register, or strike;
+- **Instrument Mix**: the explicit dry/resynthesized balance; and
+- **Tracking Sensitivity**: the input gate relative to the learned noise floor.
+
+The implementation is allocation-free, uses approximately 6.2 KiB of effect
+context, contains no mutable file-scope DSP state, and needs no `libm` call in
+the audio path. The editor executes this firmware C directly in offline and
+live-input preview. Cortex-M7 cycle measurement remains required before device
 approval.
+
+## Acceptance evidence
+
+The bundled raw DI fixture is no longer normalized and level matching is off
+for Instrument Lab. Across its eight voices the current default RMS level is
+approximately -2 dB to +1 dB relative to dry, except the intentionally
+percussive Bell / Marimba at about -6 dB. Peaks remain below 0.2 on that fixture;
+the rejected implementation was roughly +9 dB to +14 dB RMS and drove the
+Marshall rather than transforming the guitar cleanly. Automated tests require
+all eight renders to be finite, bounded, level-safe, and byte-distinct, and
+require both Transformation and Character to make material audible changes.
+
+Those host gates do not constitute hardware approval. Before another slot is
+flashed, the rebuilt version still needs:
+
+1. live review using the editor's audio-interface path with representative
+   clean guitar level;
+2. a captured pedal-ADC fixture to expose any input scaling difference;
+3. on-target Cortex-M7 deadline and arena measurements; and
+4. an explicit mapping for all four controls on the physical panel.
 
 ## Playing constraints
 
 The first tracker is intentionally monophonic. Single notes, clean muting, and
 neck-pickup tone provide the most stable result. Chords do not crash or produce
 non-finite output, but the tracker will choose one dominant periodicity rather
-than separating every note. Approximately 31 ms of pitch history is needed
-before the first confident note, followed by the selected voice's articulation
-attack.
+than separating every note. Approximately 25–40 ms of pitch history is needed
+before the first confident note, followed by the selected voice's attack.
 
 High-quality polyphonic guitar-to-instrument conversion is a separate research
 track: it requires multi-pitch estimation, onset association, and per-note
@@ -73,8 +99,10 @@ MIDI accuracy the pedal has not demonstrated.
 
 ## MIDI and device integration
 
-The current prototype produces audio, not USB MIDI messages. Its continuous
-frequency and confidence are the right inputs for a later converter:
+The current prototype produces audio, not USB MIDI messages. It now exposes a
+read-only note-state record containing the nearest MIDI note, residual pitch
+bend, velocity, frequency, confidence, gate state, and onset count. That state
+is the foundation for a later converter:
 
 - quantize a stable onset to the nearest MIDI note;
 - send pitch bend for the residual continuous offset;
