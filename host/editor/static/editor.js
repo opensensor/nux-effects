@@ -13,6 +13,11 @@ const RAMP_FRAMES = 2048;
 const DEBOUNCE_MS = 140;
 const FFT_SIZE = 4096;
 const STRING_FREQUENCIES = [82.41, 110.0, 146.83, 196.0, 246.94, 329.63];
+const WORKSPACE_STORAGE_KEY = "ncr2-open-effect-lab-workspace-v2";
+const REVIEW_STATUSES = new Set(["unreviewed", "keep", "tune", "replace"]);
+const HARDWARE_PRESET_VENDOR_ID = 0x4f50454e;
+const HARDWARE_PRESET_FIRST_ID = 0x0b000001;
+const HARDWARE_PRESET_COUNT = 32;
 
 const OPEN_ENGINE_LAYOUT = [
   {
@@ -51,6 +56,7 @@ function emptyProgram(engine, position) {
     programId: ((engine + 5) << 8) | (position + 1),
     nodes: [],
     factoryPresetIndex: engine * 8 + position,
+    review: { status: "unreviewed", notes: "" },
   };
 }
 
@@ -73,7 +79,7 @@ const state = {
   sampleRate: 48000,
   blockFrames: 64,
   channels: 2,
-  signal: "pluck",
+  signal: "guitar",
   inputLevelDb: -6,
   input: null,
   inputDigest: null,
@@ -84,8 +90,11 @@ const state = {
   report: null,
   build: null,
   monitor: "wet",
+  levelMatch: true,
   playing: false,
   userAudio: null,
+  guitarBytes: null,
+  guitarAudio: null,
   includeHardwareApp: false,
   dfu: null,
   dfuInfo: null,
@@ -151,6 +160,182 @@ function downloadJson(name, value) {
   link.download = name;
   link.click();
   URL.revokeObjectURL(link.href);
+}
+
+function normalizeReview(review) {
+  const status = REVIEW_STATUSES.has(review?.status)
+    ? review.status
+    : "unreviewed";
+  return {
+    status,
+    notes: typeof review?.notes === "string" ? review.notes : "",
+  };
+}
+
+function hardwarePresetNode(node) {
+  return node.vendorId === HARDWARE_PRESET_VENDOR_ID &&
+    node.effectId >= HARDWARE_PRESET_FIRST_ID &&
+    node.effectId < HARDWARE_PRESET_FIRST_ID + HARDWARE_PRESET_COUNT;
+}
+
+function engineBankDocument() {
+  return {
+    schema: "ncr2-open-engine-bank",
+    version: 2,
+    workspace: {
+      active_engine: state.activeOpenEngine,
+      active_effect: state.activeEffectPosition,
+      signal: state.signal,
+      input_level_db: state.inputLevelDb,
+      level_match: state.levelMatch,
+    },
+    engine_slots: state.openEngines.map((engine) => ({
+      slot: engine.slot,
+      name: engine.name,
+      effects: engine.effects.map((program, position) => ({
+        position: position + 1,
+        name: program.name,
+        program_id: program.programId,
+        review: normalizeReview(program.review),
+        nodes: program.nodes.map((node) => ({
+          vendor_id: node.vendorId,
+          effect_id: node.effectId,
+          parameters: Object.entries(node.values).map(([id, value]) => ({
+            parameter_id: Number(id),
+            value,
+          })),
+        })),
+      })),
+    })),
+    sources: state.sources,
+  };
+}
+
+function persistWorkspace() {
+  try {
+    localStorage.setItem(
+      WORKSPACE_STORAGE_KEY,
+      JSON.stringify(engineBankDocument()),
+    );
+  } catch (error) {
+    /* Private browsing and storage quotas must not disable the editor. */
+  }
+}
+
+function documentNode(node) {
+  const vendorId = Number(node?.vendor_id);
+  const effectId = Number(node?.effect_id);
+  if (!Number.isInteger(vendorId) || vendorId < 0 || vendorId > 0xffffffff ||
+      !Number.isInteger(effectId) || effectId < 0 || effectId > 0xffffffff) {
+    throw new Error("bank contains an invalid effect identity");
+  }
+  const values = {};
+  for (const parameter of node.parameters ?? []) {
+    const id = Number(parameter?.parameter_id);
+    const value = Number(parameter?.value);
+    if (!Number.isInteger(id) || id < 0 || !Number.isFinite(value)) {
+      throw new Error("bank contains an invalid parameter value");
+    }
+    values[id] = value;
+  }
+  return { vendorId, effectId, values };
+}
+
+function applyEngineBankDocument(document) {
+  if (document?.schema !== "ncr2-open-engine-bank" ||
+      ![1, 2].includes(Number(document.version))) {
+    throw new Error("not a supported NCR-2 open engine bank");
+  }
+  if (!Array.isArray(document.engine_slots) ||
+      document.engine_slots.length !== 4) {
+    throw new Error("an open engine bank must contain slots 5–8");
+  }
+
+  const imported = OPEN_ENGINE_LAYOUT.map((layout, engineIndex) => {
+    const slotNumber = engineIndex + 5;
+    const slot = document.engine_slots.find(
+      (candidate) => Number(candidate?.slot) === slotNumber,
+    );
+    if (!slot || !Array.isArray(slot.effects) || slot.effects.length !== 8) {
+      throw new Error(`open engine slot ${slotNumber} must contain 8 effects`);
+    }
+    return {
+      slot: slotNumber,
+      name: typeof slot.name === "string" ? slot.name : layout.name,
+      effects: Array.from({ length: 8 }, (_, position) => {
+        const effect = slot.effects.find(
+          (candidate) => Number(candidate?.position) === position + 1,
+        );
+        if (!effect) {
+          throw new Error(
+            `open engine slot ${slotNumber} is missing position ${position + 1}`,
+          );
+        }
+        const programId = Number(effect.program_id);
+        if (!Number.isInteger(programId) ||
+            programId < 0 || programId > 0xffffffff) {
+          throw new Error("bank contains an invalid program id");
+        }
+        return {
+          name: typeof effect.name === "string"
+            ? effect.name
+            : layout.effects[position],
+          programId,
+          nodes: (effect.nodes ?? []).map(documentNode),
+          factoryPresetIndex: engineIndex * 8 + position,
+          review: normalizeReview(effect.review),
+        };
+      }),
+    };
+  });
+
+  state.openEngines = imported;
+  state.sources = Array.isArray(document.sources)
+    ? document.sources.map((source) => {
+      if (typeof source?.name !== "string" ||
+          typeof source?.text !== "string") {
+        throw new Error("bank contains an invalid authored source");
+      }
+      return { name: source.name, text: source.text };
+    })
+    : [];
+  const workspace = document.workspace ?? {};
+  state.activeOpenEngine = Math.max(
+    0,
+    Math.min(3, Number(workspace.active_engine) || 0),
+  );
+  state.activeEffectPosition = Math.max(
+    0,
+    Math.min(7, Number(workspace.active_effect) || 0),
+  );
+  state.signal = [
+    "guitar", "pluck", "chord", "sine", "sweep", "noise", "impulse",
+  ].includes(workspace.signal) ? workspace.signal : "guitar";
+  state.inputLevelDb = Number.isFinite(Number(workspace.input_level_db))
+    ? Math.max(-30, Math.min(0, Number(workspace.input_level_db)))
+    : -6;
+  state.levelMatch = workspace.level_match !== false;
+  state.program = state.openEngines[state.activeOpenEngine]
+    .effects[state.activeEffectPosition];
+  state.includeHardwareApp = state.openEngines.some((engine) =>
+    engine.effects.some((program) => program.nodes.some(hardwarePresetNode)),
+  );
+}
+
+function restoreWorkspace() {
+  try {
+    const saved = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    if (!saved) return false;
+    applyEngineBankDocument(JSON.parse(saved));
+    return true;
+  } catch (error) {
+    try {
+      localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+    } catch (storageError) {
+      /* Storage can be entirely unavailable in hardened browser profiles. */
+    }
+    return false;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -356,10 +541,16 @@ function buildRamp() {
 
 async function prepareInput() {
   const captured = state.signal === "file" || state.signal === "mic";
-  const mono =
-    captured && state.userAudio !== null
-      ? state.userAudio
-      : normalize(generateSignal(captured ? "pluck" : state.signal));
+  let mono;
+  if (state.signal === "guitar" && state.guitarAudio !== null) {
+    mono = state.guitarAudio;
+  } else if (captured && state.userAudio !== null) {
+    mono = state.userAudio;
+  } else {
+    mono = normalize(generateSignal(
+      state.signal === "guitar" || captured ? "pluck" : state.signal,
+    ));
+  }
   const gain = Math.pow(10, state.inputLevelDb / 20);
   state.input = interleave(mono, state.channels, gain);
   state.inputDigest = await digestOf(state.input.buffer);
@@ -379,6 +570,17 @@ async function decodeUserAudio(arrayBuffer) {
     }
   }
   return normalize(mono);
+}
+
+async function loadBundledGuitar() {
+  if (state.guitarBytes === null) {
+    const response = await fetch("/static/audio/clean-guitar-di.wav");
+    if (!response.ok) {
+      throw new Error(`clean guitar recording unavailable: ${response.status}`);
+    }
+    state.guitarBytes = await response.arrayBuffer();
+  }
+  state.guitarAudio = await decodeUserAudio(state.guitarBytes.slice(0));
 }
 
 async function captureMicrophone(seconds = 2.0) {
@@ -463,6 +665,29 @@ function stopNodes() {
   playback.nodes = [];
 }
 
+function auditionWetGain() {
+  if (!state.levelMatch || !state.report) return 1;
+  const dry = Number(state.report.rms_input);
+  const wet = Number(state.report.rms_output);
+  const peak = Number(state.report.peak_output);
+  if (!(dry > 0) || !(wet > 0)) return 1;
+  const rmsGain = dry / wet;
+  const peakSafeGain = peak > 0 ? 0.98 / peak : 1;
+  return Math.max(0.001, Math.min(7.943, rmsGain, peakSafeGain));
+}
+
+function updateLevelMatchNote() {
+  if (!dom.levelMatchNote) return;
+  if (!state.levelMatch) {
+    dom.levelMatchNote.textContent = "Off; playback uses the raw DSP level.";
+    return;
+  }
+  const gain = auditionWetGain();
+  dom.levelMatchNote.textContent = state.report
+    ? `Playback trim ${formatDb(decibels(gain))}; DSP and measurements stay raw.`
+    : "Playback only; measurements remain raw.";
+}
+
 function startPlayback(offset = 0) {
   if (state.input === null || state.output === null) return;
   const context = ensureContext();
@@ -478,7 +703,9 @@ function startPlayback(offset = 0) {
     const gain = context.createGain();
     source.buffer = buffer;
     source.loop = true;
-    gain.gain.value = state.monitor === name ? 1 : 0;
+    gain.gain.value = state.monitor === name
+      ? (name === "wet" ? auditionWetGain() : 1)
+      : 0;
     source.connect(gain).connect(context.destination);
     source.start(0, offset % buffer.duration);
     playback.nodes.push(source);
@@ -505,10 +732,13 @@ function currentOffset() {
 
 function applyMonitor() {
   Object.entries(playback.gains).forEach(([name, gain]) => {
-    gain.gain.value = state.monitor === name ? 1 : 0;
+    gain.gain.value = state.monitor === name
+      ? (name === "wet" ? auditionWetGain() : 1)
+      : 0;
   });
   dom.ab.textContent =
     state.monitor === "wet" ? "Hear dry" : "Hear processed";
+  updateLevelMatchNote();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1032,6 +1262,7 @@ async function runRender() {
   state.rampOutput = probe.audio.length > 0 ? probe.audio : state.ramp;
 
   updateMetrics(state.report);
+  updateLevelMatchNote();
   drawAll();
   dom.ab.disabled = state.output === null;
   if (state.output === null) stopPlayback();
@@ -1102,7 +1333,7 @@ function renderRegistry() {
   dom.registry.replaceChildren();
   state.catalog.forEach((effect) => {
     const card = document.createElement("article");
-    card.className = "effect-card";
+    card.className = "effect-card shadow-sm transition-shadow hover:shadow-md";
 
     const header = document.createElement("header");
     const title = document.createElement("h3");
@@ -1182,6 +1413,7 @@ function addNode(effect) {
   });
   renderChain();
   renderEngineBank();
+  persistWorkspace();
   scheduleRender();
 }
 
@@ -1192,7 +1424,7 @@ function renderChain() {
   state.program.nodes.forEach((node, index) => {
     const effect = effectFor(node);
     const card = document.createElement("article");
-    card.className = "node";
+    card.className = "node shadow-sm";
 
     const header = document.createElement("header");
     const title = document.createElement("h3");
@@ -1242,8 +1474,11 @@ function renderEngineBank() {
     (program, position) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "effect-position";
+      button.className =
+        "effect-position transition duration-150 hover:-translate-y-0.5 " +
+        "hover:shadow-md";
       button.dataset.active = String(position === state.activeEffectPosition);
+      button.dataset.review = normalizeReview(program.review).status;
       button.setAttribute(
         "aria-pressed",
         String(position === state.activeEffectPosition),
@@ -1253,8 +1488,9 @@ function renderEngineBank() {
       const name = document.createElement("span");
       name.textContent = program.name;
       const count = document.createElement("em");
-      count.textContent = `${program.nodes.length} node${
-        program.nodes.length === 1 ? "" : "s"}`;
+      const review = normalizeReview(program.review).status;
+      count.textContent = `${review === "unreviewed" ? "unreviewed" : review}` +
+        ` · ${program.nodes.length} node${program.nodes.length === 1 ? "" : "s"}`;
       button.append(number, name, count);
       button.addEventListener("click", () => selectOpenProgram(
         state.activeOpenEngine,
@@ -1263,6 +1499,52 @@ function renderEngineBank() {
       dom.effectPositions.append(button);
     },
   );
+  renderReview();
+}
+
+function reviewInventory() {
+  const counts = { unreviewed: 0, keep: 0, tune: 0, replace: 0 };
+  state.openEngines.forEach((engine) => {
+    engine.effects.forEach((program) => {
+      counts[normalizeReview(program.review).status] += 1;
+    });
+  });
+  return counts;
+}
+
+function renderReview() {
+  const engine = state.openEngines[state.activeOpenEngine];
+  const program = engine.effects[state.activeEffectPosition];
+  const review = normalizeReview(program.review);
+  program.review = review;
+  dom.reviewLocation.textContent =
+    `Slot ${engine.slot} · position ${state.activeEffectPosition + 1} · ` +
+    program.name;
+  dom.reviewNotes.value = review.notes;
+  document.querySelectorAll("[data-review-status]").forEach((button) => {
+    const active = button.dataset.reviewStatus === review.status;
+    button.dataset.active = String(active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const counts = reviewInventory();
+  dom.reviewSummary.textContent =
+    `${counts.keep} keep · ${counts.tune} tune · ` +
+    `${counts.replace} replace · ${counts.unreviewed} left`;
+}
+
+function setReviewStatus(status) {
+  if (!REVIEW_STATUSES.has(status)) return;
+  state.program.review = normalizeReview(state.program.review);
+  state.program.review.status = status;
+  persistWorkspace();
+  renderEngineBank();
+}
+
+function stepOpenProgram(delta) {
+  const total = OPEN_ENGINE_LAYOUT.length * 8;
+  const current = state.activeOpenEngine * 8 + state.activeEffectPosition;
+  const next = (current + delta + total) % total;
+  selectOpenProgram(Math.floor(next / 8), next % 8);
 }
 
 function selectOpenProgram(engine, position) {
@@ -1273,14 +1555,15 @@ function selectOpenProgram(engine, position) {
   query("program-id").value = formatHex(state.program.programId);
   renderEngineBank();
   renderChain();
+  persistWorkspace();
   scheduleRender();
 }
 
 function seedHardwarePreset(program) {
   if (program.nodes.length !== 0) return;
   program.nodes.push({
-    vendorId: 0x4f50454e,
-    effectId: 0x0b000001 + program.factoryPresetIndex,
+    vendorId: HARDWARE_PRESET_VENDOR_ID,
+    effectId: HARDWARE_PRESET_FIRST_ID + program.factoryPresetIndex,
     values: { 1: 2048, 2: 2048, 3: 4095 },
   });
 }
@@ -1289,9 +1572,7 @@ function removeHardwarePresets() {
   state.openEngines.forEach((engine) => {
     engine.effects.forEach((program) => {
       program.nodes = program.nodes.filter((node) => !(
-        node.vendorId === 0x4f50454e &&
-        node.effectId >= 0x0b000001 &&
-        node.effectId < 0x0b000001 + 32
+        hardwarePresetNode(node)
       ));
     });
   });
@@ -1309,34 +1590,35 @@ function loadFirmwareDefaults() {
   dom.hardwareApp.checked = true;
   renderEngineBank();
   renderChain();
+  persistWorkspace();
   setStatus("loading all 32 firmware defaults…", "busy");
   compileSources();
 }
 
 function exportEngineBank() {
-  downloadJson("ncr2-open-engine-bank.json", {
-    schema: "ncr2-open-engine-bank",
-    version: 1,
-    engine_slots: state.openEngines.map((engine) => ({
-      slot: engine.slot,
-      name: engine.name,
-      effects: engine.effects.map((program, position) => ({
-        position: position + 1,
-        name: program.name,
-        program_id: program.programId,
-        nodes: program.nodes.map((node) => ({
-          vendor_id: node.vendorId,
-          effect_id: node.effectId,
-          parameters: Object.entries(node.values).map(([id, value]) => ({
-            parameter_id: Number(id),
-            value,
-          })),
-        })),
-      })),
-    })),
-    sources: state.sources,
-  });
-  setStatus("exported four open engines with eight effects each", "ok");
+  downloadJson("ncr2-open-engine-bank.json", engineBankDocument());
+  setStatus("exported four engines, reviews, notes, and control settings", "ok");
+}
+
+async function importEngineBank(file) {
+  const document = JSON.parse(await file.text());
+  applyEngineBankDocument(document);
+  persistWorkspace();
+  state.activeSource = 0;
+  dom.hardwareApp.checked = state.includeHardwareApp;
+  dom.signal.value = state.signal;
+  dom.levelMatch.checked = state.levelMatch;
+  query("input-level").value = String(state.inputLevelDb);
+  query("input-level-value").textContent =
+    `${state.inputLevelDb >= 0 ? "" : "−"}${Math.abs(state.inputLevelDb)} dB`;
+  query("program-name").value = state.program.name;
+  query("program-id").value = formatHex(state.program.programId);
+  renderEngineBank();
+  renderChain();
+  renderSourceList();
+  await prepareInput();
+  await compileSources();
+  setStatus(`imported ${file.name}`, "ok");
 }
 
 function updateDfuReady() {
@@ -1421,6 +1703,7 @@ function parameterControl(node, parameter) {
   slider.addEventListener("input", () => {
     node.values[parameter.parameter_id] = Number(slider.value);
     show();
+    persistWorkspace();
     scheduleRender();
   });
 
@@ -1442,6 +1725,7 @@ function moveNode(index, direction) {
   if (target < 0 || target >= nodes.length) return;
   [nodes[index], nodes[target]] = [nodes[target], nodes[index]];
   renderChain();
+  persistWorkspace();
   scheduleRender();
 }
 
@@ -1449,6 +1733,7 @@ function removeNode(index) {
   state.program.nodes.splice(index, 1);
   renderChain();
   renderEngineBank();
+  persistWorkspace();
   scheduleRender();
 }
 
@@ -1486,6 +1771,7 @@ async function newEffect() {
   );
   state.sources.push({ name: template.file_name, text: template.text });
   state.activeSource = state.sources.length - 1;
+  persistWorkspace();
   renderSourceList();
   setStatus(`created ${template.file_name}`, "ok");
   await compileSources();
@@ -1495,6 +1781,7 @@ async function compileSources() {
   if (state.sources.length > 0) {
     state.sources[state.activeSource].text = dom.source.value;
   }
+  persistWorkspace();
   setStatus("compiling…", "busy");
   try {
     const payload = await refreshCatalog();
@@ -1597,12 +1884,14 @@ async function changeFormat() {
     await playback.context.close();
     playback.context = null;
   }
+  if (state.guitarBytes !== null) await loadBundledGuitar();
   await prepareInput();
   scheduleRender();
 }
 
 async function changeSignal() {
   state.signal = dom.signal.value;
+  persistWorkspace();
   if (state.signal === "file") {
     dom.fileInput.click();
     return;
@@ -1647,6 +1936,12 @@ function bind() {
   dom.exportFiles = query("export-files");
   dom.hardwareApp = query("hardware-app");
   dom.effectPositions = query("effect-positions");
+  dom.reviewLocation = query("review-location");
+  dom.reviewNotes = query("review-notes");
+  dom.reviewSummary = query("review-summary");
+  dom.bankFile = query("bank-file");
+  dom.levelMatch = query("level-match");
+  dom.levelMatchNote = query("level-match-note");
   dom.webhidState = query("webhid-state");
   dom.dfuFile = query("dfu-file");
   dom.dfuAck = query("dfu-ack");
@@ -1661,7 +1956,28 @@ function bind() {
     ));
   });
   query("load-defaults").addEventListener("click", loadFirmwareDefaults);
+  query("import-bank").addEventListener("click", () => dom.bankFile.click());
   query("export-bank").addEventListener("click", exportEngineBank);
+  dom.bankFile.addEventListener("change", () => {
+    const file = dom.bankFile.files?.[0];
+    if (!file) return;
+    importEngineBank(file).catch((error) => {
+      setStatus(`could not import bank: ${error.message}`, "error");
+    }).finally(() => {
+      dom.bankFile.value = "";
+    });
+  });
+  query("previous-effect").addEventListener("click", () => stepOpenProgram(-1));
+  query("next-effect").addEventListener("click", () => stepOpenProgram(1));
+  document.querySelectorAll("[data-review-status]").forEach((button) => {
+    button.addEventListener("click", () =>
+      setReviewStatus(button.dataset.reviewStatus));
+  });
+  dom.reviewNotes.addEventListener("input", () => {
+    state.program.review = normalizeReview(state.program.review);
+    state.program.review.notes = dom.reviewNotes.value;
+    persistWorkspace();
+  });
   query("dfu-connect").addEventListener("click", () => {
     connectDfu().catch((error) => {
       dom.webhidState.textContent = "Disconnected";
@@ -1690,6 +2006,7 @@ function bind() {
     state.sources.splice(state.activeSource, 1);
     state.activeSource = Math.max(0, state.activeSource - 1);
     renderSourceList();
+    persistWorkspace();
     compileSources();
   });
 
@@ -1702,6 +2019,7 @@ function bind() {
   dom.source.addEventListener("input", () => {
     if (state.sources.length > 0) {
       state.sources[state.activeSource].text = dom.source.value;
+      persistWorkspace();
     }
   });
 
@@ -1712,6 +2030,12 @@ function bind() {
 
   dom.ab.addEventListener("click", () => {
     state.monitor = state.monitor === "wet" ? "dry" : "wet";
+    applyMonitor();
+  });
+
+  dom.levelMatch.addEventListener("change", () => {
+    state.levelMatch = dom.levelMatch.checked;
+    persistWorkspace();
     applyMonitor();
   });
 
@@ -1738,6 +2062,7 @@ function bind() {
     query("input-level-value").textContent =
       `${state.inputLevelDb >= 0 ? "" : "−"}` +
       `${Math.abs(state.inputLevelDb)} dB`;
+    persistWorkspace();
     prepareInput().then(scheduleRender);
   });
 
@@ -1749,11 +2074,13 @@ function bind() {
 
   query("program-name").addEventListener("input", (event) => {
     state.program.name = event.target.value || "Untitled";
+    persistWorkspace();
     renderEngineBank();
   });
   query("program-id").addEventListener("change", (event) => {
     state.program.programId = parseNumber(event.target.value, 1);
     event.target.value = formatHex(state.program.programId);
+    persistWorkspace();
   });
 
   dom.hardwareApp.addEventListener("change", () => {
@@ -1769,6 +2096,7 @@ function bind() {
       renderEngineBank();
       renderChain();
     }
+    persistWorkspace();
     setStatus(
       state.includeHardwareApp
         ? "extracting the hardware app presets…"
@@ -1786,7 +2114,7 @@ function bind() {
   });
 
   document.addEventListener("keydown", (event) => {
-    const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(
+    const typing = ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(
       document.activeElement?.tagName,
     );
     if (typing) return;
@@ -1799,6 +2127,11 @@ function bind() {
       state.monitor = state.monitor === "wet" ? "dry" : "wet";
       applyMonitor();
     }
+    if (event.key === "[") stepOpenProgram(-1);
+    if (event.key === "]") stepOpenProgram(1);
+    if (event.key.toLowerCase() === "k") setReviewStatus("keep");
+    if (event.key.toLowerCase() === "t") setReviewStatus("tune");
+    if (event.key.toLowerCase() === "r") setReviewStatus("replace");
   });
 
   new ResizeObserver(() => drawAll()).observe(document.body);
@@ -1808,10 +2141,18 @@ function bind() {
 }
 
 async function start() {
+  const restored = restoreWorkspace();
   bind();
+  dom.signal.value = state.signal;
+  dom.levelMatch.checked = state.levelMatch;
+  query("input-level").value = String(state.inputLevelDb);
+  query("input-level-value").textContent =
+    `${state.inputLevelDb >= 0 ? "" : "−"}${Math.abs(state.inputLevelDb)} dB`;
+  query("program-name").value = state.program.name;
   renderEngineBank();
   renderSourceList();
   updateMetrics(null);
+  updateLevelMatchNote();
 
   try {
     state.session = await getJson("/api/session");
@@ -1829,7 +2170,17 @@ async function start() {
     query("hardware-app-note").textContent =
       `${hardware.presets.length} fixed-point presets lifted from ` +
       `${hardware.source} at ${hardware.sample_rate} Hz`;
+    if (!restored) {
+      state.openEngines.forEach((engine) => {
+        engine.effects.forEach(seedHardwarePreset);
+      });
+      state.includeHardwareApp = true;
+      renderEngineBank();
+      renderChain();
+      persistWorkspace();
+    }
   }
+  dom.hardwareApp.checked = state.includeHardwareApp;
 
   if (!state.session.compiler_available) {
     setStatus("no host C compiler found; previews unavailable", "error");
@@ -1838,8 +2189,14 @@ async function start() {
 
   try {
     await refreshCatalog();
+    await loadBundledGuitar();
     await prepareInput();
-    setStatus("registry loaded — add an effect to hear it", "ok");
+    setStatus(
+      restored
+        ? "review workspace restored · real clean guitar loaded"
+        : "real clean guitar loaded · choose an effect to begin reviewing",
+      "ok",
+    );
     drawAll();
     scheduleRender();
   } catch (error) {

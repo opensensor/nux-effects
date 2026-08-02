@@ -45,7 +45,9 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 MAX_INPUT_CACHE_BYTES = 96 * 1024 * 1024
 FRAME_HEADER = struct.Struct("<I")
-STATIC_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+STATIC_NAME_PATTERN = re.compile(
+    r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+)
 ENUM_PATTERN = re.compile(
     r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*(\d+)\s*,?\s*$",
     re.MULTILINE,
@@ -57,6 +59,7 @@ CONTENT_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
+    ".wav": "audio/wav",
 }
 
 
@@ -324,7 +327,10 @@ class EditorHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(error)}, 400)
 
     def _send_static(self, name: str) -> None:
-        if STATIC_NAME_PATTERN.match(name) is None:
+        if (
+            STATIC_NAME_PATTERN.fullmatch(name) is None
+            or any(part in {".", ".."} for part in Path(name).parts)
+        ):
             self._send_json({"error": "not found"}, 404)
             return
         path = STATIC / name

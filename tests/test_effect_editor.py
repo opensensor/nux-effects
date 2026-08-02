@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 
 
@@ -236,15 +237,46 @@ class BrowserBankAndDfuTests(unittest.TestCase):
 
         self.assertEqual(page.count("data-open-engine="), 4)
         self.assertIn('id="effect-positions"', page)
+        self.assertIn('id="review-notes"', page)
+        self.assertIn('id="import-bank"', page)
+        self.assertIn('id="level-match"', page)
+        self.assertIn('value="guitar"', page)
         self.assertIn('id="dfu-connect"', page)
         self.assertIn('id="dfu-install"', page)
         self.assertIn("OPEN_ENGINE_LAYOUT", script)
         self.assertIn('schema: "ncr2-open-engine-bank"', script)
+        self.assertIn("version: 2", script)
+        self.assertIn("WORKSPACE_STORAGE_KEY", script)
+        self.assertIn("clean-guitar-di.wav", script)
         self.assertIn("BEGIN_IMAGE: 2", dfu)
         self.assertIn("ERASE_SLOT: 3", dfu)
         self.assertIn("SET_PENDING: 7", dfu)
         self.assertNotIn("BEGIN_FULL_FLASH", dfu)
         self.assertNotIn("ERASE_FULL_FLASH", dfu)
+
+    def test_tailwind_is_local_and_real_guitar_is_bundled(self):
+        package = json.loads((ROOT / "package.json").read_text())
+        generated = (EDITOR / "static" / "tailwind.generated.css").read_text()
+        recording = EDITOR / "static" / "audio" / "clean-guitar-di.wav"
+        audio_notes = (recording.parent / "README.md").read_text()
+
+        self.assertEqual(package["devDependencies"]["tailwindcss"], "4.3.3")
+        self.assertIn("tailwindcss v4.3.3", generated)
+        self.assertIn(".shadow-sm", generated)
+        self.assertIn("CC0 1.0", audio_notes)
+        with wave.open(str(recording), "rb") as source:
+            self.assertEqual(source.getframerate(), 48000)
+            self.assertEqual(source.getnchannels(), 1)
+            self.assertEqual(source.getsampwidth(), 2)
+            self.assertEqual(source.getnframes(), 288000)
+
+    def test_static_server_allows_bounded_audio_subdirectories(self):
+        self.assertIsNotNone(
+            server.STATIC_NAME_PATTERN.fullmatch("audio/clean-guitar-di.wav")
+        )
+        self.assertEqual(server.CONTENT_TYPES[".wav"], "audio/wav")
+        source = (EDITOR / "server.py").read_text()
+        self.assertIn('part in {".", ".."}', source)
 
     @unittest.skipIf(
         shutil.which("node") is None,

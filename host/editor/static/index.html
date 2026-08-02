@@ -4,10 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Open Effect Lab — NCR-2</title>
+    <link rel="stylesheet" href="/static/tailwind.generated.css" />
     <link rel="stylesheet" href="/static/editor.css" />
   </head>
-  <body data-theme="auto">
-    <header class="top">
+  <body data-theme="auto" class="min-h-screen antialiased selection:bg-blue-500/20">
+    <header class="top shadow-sm backdrop-blur-xl">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <div>
@@ -51,7 +52,8 @@
       </div>
     </header>
 
-    <section class="bank-workspace" aria-labelledby="bank-title">
+    <section class="bank-workspace shadow-sm ring-1 ring-black/5 dark:ring-white/5"
+             aria-labelledby="bank-title">
       <div class="panel-head">
         <div>
           <h2 id="bank-title">Pedal engine slots</h2>
@@ -65,9 +67,14 @@
           <button type="button" id="load-defaults" class="primary small">
             Load firmware defaults
           </button>
-          <button type="button" id="export-bank" class="ghost small">
-            Export bank JSON
+          <button type="button" id="import-bank" class="ghost small">
+            Import bank
           </button>
+          <button type="button" id="export-bank" class="ghost small">
+            Export review + bank
+          </button>
+          <input id="bank-file" type="file" accept="application/json,.json"
+                 hidden />
         </div>
       </div>
       <div class="engine-slots" aria-label="Eight engine slots">
@@ -75,29 +82,64 @@
         <div class="engine-slot factory-slot"><b>2</b><span>Factory Reverb</span></div>
         <div class="engine-slot factory-slot"><b>3</b><span>Factory Mod</span></div>
         <div class="engine-slot factory-slot"><b>4</b><span>Factory Metal</span></div>
-        <button type="button" class="engine-slot open-slot" data-open-engine="0">
+        <button type="button" class="engine-slot open-slot transition duration-150 hover:-translate-y-0.5 hover:shadow-md" data-open-engine="0">
           <b>5</b><span>Open Amp Studio</span>
         </button>
-        <button type="button" class="engine-slot open-slot" data-open-engine="1">
+        <button type="button" class="engine-slot open-slot transition duration-150 hover:-translate-y-0.5 hover:shadow-md" data-open-engine="1">
           <b>6</b><span>Drive + Dynamics</span>
         </button>
-        <button type="button" class="engine-slot open-slot" data-open-engine="2">
+        <button type="button" class="engine-slot open-slot transition duration-150 hover:-translate-y-0.5 hover:shadow-md" data-open-engine="2">
           <b>7</b><span>Motion + Pitch</span>
         </button>
-        <button type="button" class="engine-slot open-slot" data-open-engine="3">
+        <button type="button" class="engine-slot open-slot transition duration-150 hover:-translate-y-0.5 hover:shadow-md" data-open-engine="3">
           <b>8</b><span>Echo + Space</span>
         </button>
       </div>
       <div class="effect-positions" id="effect-positions"
            aria-label="Effects in selected open engine"></div>
-      <p class="panel-note">
-        The Program panel edits the selected open position immediately.
-        Empty positions are valid passthrough programs.
-      </p>
+      <div class="effect-review shadow-inner" aria-labelledby="review-title">
+        <div class="review-head">
+          <div>
+            <h3 id="review-title">Effect review</h3>
+            <strong id="review-location"></strong>
+          </div>
+          <div class="review-nav">
+            <button type="button" id="previous-effect" class="ghost small">
+              ← Previous
+            </button>
+            <button type="button" id="next-effect" class="primary small">
+              Next →
+            </button>
+          </div>
+        </div>
+        <div class="review-body">
+          <div>
+            <span class="field-label">Decision</span>
+            <div class="review-decisions" role="group"
+                 aria-label="Review decision">
+              <button type="button" data-review-status="unreviewed">Unreviewed</button>
+              <button type="button" data-review-status="keep">Keep</button>
+              <button type="button" data-review-status="tune">Tune</button>
+              <button type="button" data-review-status="replace">Replace</button>
+            </div>
+            <p class="review-summary" id="review-summary"></p>
+          </div>
+          <label class="review-notes-label">
+            <span class="field-label">Listening notes</span>
+            <textarea id="review-notes" class="review-notes" rows="3"
+                      placeholder="What works, what does not, and what this slot should become…"></textarea>
+          </label>
+        </div>
+        <p class="panel-note">
+          Reviews and control settings are saved in this browser. Use
+          <kbd>[</kbd>/<kbd>]</kbd> to move and <kbd>K</kbd>, <kbd>T</kbd>,
+          or <kbd>R</kbd> to mark Keep, Tune, or Replace.
+        </p>
+      </div>
     </section>
 
     <main>
-      <section class="panel" aria-labelledby="registry-title">
+      <section class="panel shadow-sm" aria-labelledby="registry-title">
         <div class="panel-head">
           <h2 id="registry-title">Registry</h2>
           <button type="button" id="new-effect" class="primary small">
@@ -118,7 +160,7 @@
         <div id="registry" class="registry"></div>
       </section>
 
-      <section class="panel" aria-labelledby="chain-title">
+      <section class="panel shadow-sm" aria-labelledby="chain-title">
         <div class="panel-head">
           <h2 id="chain-title">Program</h2>
           <button type="button" id="verify" class="ghost small">
@@ -142,7 +184,7 @@
         </p>
       </section>
 
-      <section class="panel preview" aria-labelledby="preview-title">
+      <section class="panel preview shadow-sm" aria-labelledby="preview-title">
         <div class="panel-head">
           <h2 id="preview-title">Preview</h2>
           <div class="transport">
@@ -159,14 +201,15 @@
           <label>
             <span>Test signal</span>
             <select id="signal">
-              <option value="pluck">Guitar pluck</option>
-              <option value="chord">Open chord</option>
+              <option value="guitar">Real clean guitar (DI)</option>
+              <option value="pluck">Synthetic pluck (diagnostic)</option>
+              <option value="chord">Synthetic chord (diagnostic)</option>
               <option value="sine">Sine 220 Hz</option>
               <option value="sweep">Sweep 40 Hz → 8 kHz</option>
               <option value="noise">Noise burst</option>
               <option value="impulse">Impulse</option>
-              <option value="file">Audio file…</option>
-              <option value="mic">Microphone…</option>
+              <option value="file">Your guitar recording…</option>
+              <option value="mic">Live guitar / audio input…</option>
             </select>
           </label>
           <label class="level">
@@ -180,6 +223,13 @@
               value="-6"
             />
           </label>
+          <label class="toggle level-match-toggle">
+            <input type="checkbox" id="level-match" checked />
+            <span>
+              <b>Level-match audition</b>
+              <em id="level-match-note">Playback only; measurements remain raw.</em>
+            </span>
+          </label>
           <input id="file-input" type="file" accept="audio/*" hidden />
         </div>
 
@@ -191,7 +241,7 @@
               <i class="swatch swatch-out"></i>Output
             </span>
           </figcaption>
-          <canvas id="waveform" height="176"></canvas>
+          <canvas id="waveform" height="148"></canvas>
         </figure>
 
         <figure class="chart">
@@ -202,7 +252,7 @@
               <i class="swatch swatch-out"></i>Output
             </span>
           </figcaption>
-          <canvas id="spectrum" height="150"></canvas>
+          <canvas id="spectrum" height="126"></canvas>
         </figure>
 
         <figure class="chart">
@@ -212,7 +262,7 @@
               <i class="swatch swatch-out"></i>Output vs input ramp
             </span>
           </figcaption>
-          <canvas id="transfer" height="170"></canvas>
+          <canvas id="transfer" height="144"></canvas>
           <p class="panel-note">
             A −1 → +1 ramp through the chain. Memoryless effects draw
             their shaping curve; effects with state (filters, delays)
@@ -234,7 +284,7 @@
       </section>
     </main>
 
-    <section class="drawer" aria-labelledby="source-title">
+    <section class="drawer shadow-sm" aria-labelledby="source-title">
       <div class="drawer-head">
         <h2 id="source-title">Effect source</h2>
         <div class="drawer-controls">
@@ -278,7 +328,8 @@
       </div>
     </section>
 
-    <section class="dfu-panel" aria-labelledby="dfu-title">
+    <section class="dfu-panel shadow-sm ring-1 ring-black/5 dark:ring-white/5"
+             aria-labelledby="dfu-title">
       <div class="panel-head">
         <div>
           <h2 id="dfu-title">Install open engines</h2>

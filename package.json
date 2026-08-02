@@ -1,0 +1,12 @@
+{
+  "name": "ncr2-open-effect-lab",
+  "private": true,
+  "scripts": {
+    "build:editor-css": "tailwindcss -i ./host/editor/static/tailwind.css -o ./host/editor/static/tailwind.generated.css --minify",
+    "watch:editor-css": "tailwindcss -i ./host/editor/static/tailwind.css -o ./host/editor/static/tailwind.generated.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}

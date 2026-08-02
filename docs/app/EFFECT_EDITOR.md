@@ -29,6 +29,35 @@ program or effect that is wrong.
 The browser owns only what the device does not: test-signal generation,
 playback, and drawing.
 
+The primary listening signal is not synthesized. The page bundles a
+six-second, 48 kHz mono excerpt from the CC0 GuitarJam dataset: a clean
+electric guitar recorded directly into an audio interface. It preserves real
+pick attacks, fret transitions, pickup harmonics, and playing dynamics. The
+older physical-model pluck and chord remain explicitly labeled diagnostic
+signals, while file and microphone capture allow testing a particular guitar
+and playing style.
+
+Level-matched auditioning applies a bounded, peak-safe gain only in the Web
+Audio playback mixer. The output waveform, spectrum, transfer curve, peak,
+RMS, and exported parameter settings always describe the unmodified firmware
+render. This keeps dry/wet comparisons honest without concealing an engine
+whose device level needs correction.
+
+## Reviewing the 4×8 bank
+
+Each open position carries a review record: Unreviewed, Keep, Tune, or
+Replace, plus free-form listening notes. Previous/next controls and keyboard
+shortcuts make a complete 32-effect pass practical. The page persists the
+bank, parameters, authored sources, reviews, and current position in local
+browser storage. Exported `ncr2-open-engine-bank` version 2 JSON contains the
+same data and can be imported later or shared for implementation work;
+version 1 bank files remain importable with empty reviews.
+
+Tailwind CSS 4 provides the local interface utility layer, compiled into a
+committed static stylesheet so the editor remains network-independent at
+runtime. The existing focused CSS still owns charts, DSP parameter controls,
+and semantic review colors.
+
 ## What it measures
 
 The report is the runtime's own answer, not the page's opinion:

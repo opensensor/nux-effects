@@ -2,6 +2,8 @@
 dump*.bin
 *.bina
 nux-metal-mode.bin
+nux-metal-core-deluxe.bin
+nux-verb-core-deluxe.bin
 nux-core-deluxe-preservation-*.tar.zst
 nux-core-deluxe-preservation-*.tar.zst.sha256
 SHA256SUMS
@@ -32,6 +34,7 @@ zero_wear/build-*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+node_modules/
 
 # Ghidra projects and local analysis state.
 *.gpr
