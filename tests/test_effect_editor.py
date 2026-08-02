@@ -804,7 +804,9 @@ class HostRenderTests(unittest.TestCase):
         payload = struct.pack(
             f"<{len(integer)}f", *(sample / 32768.0 for sample in integer)
         )
+        source_samples = [sample / 32768.0 for sample in integer]
         fingerprints = set()
+        outputs = {}
         for effect_id in range(0x100, 0x108):
             node = codegen.ProgramNode(codegen.VENDOR_OPEN, effect_id)
             result = self.build(
@@ -823,7 +825,52 @@ class HostRenderTests(unittest.TestCase):
             self.assertGreaterEqual(change, -9.0, effect_id)
             self.assertLessEqual(change, 3.0, effect_id)
             fingerprints.add(hashlib.sha256(rendered.audio).digest())
+            output = samples(rendered.audio)
+            outputs[effect_id] = output
+
+            # A nominally wet instrument voice must not merely be a scaled
+            # copy of the pickup.  Remove the best-fit dry component and
+            # require the resynthesized residual to dominate the result.
+            dry = source_samples[24000:]
+            wet = output[24000:]
+            dry_energy = sum(value * value for value in dry)
+            wet_energy = sum(value * value for value in wet)
+            dry_scale = sum(
+                original * processed
+                for original, processed in zip(dry, wet)
+            ) / dry_energy
+            residual_energy = sum(
+                (processed - dry_scale * original) ** 2
+                for original, processed in zip(dry, wet)
+            )
+            self.assertGreater(
+                math.sqrt(residual_energy / wet_energy),
+                0.90,
+                effect_id,
+            )
         self.assertEqual(len(fingerprints), 8)
+
+        # Different labels also need different spectra.  This specifically
+        # guards the old Organ/Brass pair, which differed numerically but was
+        # effectively the same harmonic oscillator by ear.
+        for first_id, first in outputs.items():
+            first_tail = first[24000:]
+            for second_id, second in outputs.items():
+                if second_id <= first_id:
+                    continue
+                second_tail = second[24000:]
+                cross = sum(
+                    a * b for a, b in zip(first_tail, second_tail)
+                )
+                normalization = math.sqrt(
+                    sum(a * a for a in first_tail) *
+                    sum(b * b for b in second_tail)
+                )
+                self.assertLess(
+                    abs(cross / normalization),
+                    0.97,
+                    (first_id, second_id),
+                )
 
     def test_transformation_macro_has_an_unmistakable_dry_to_voice_sweep(self):
         frames = 48000

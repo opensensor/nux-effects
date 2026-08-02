@@ -1,6 +1,6 @@
 # Instrument Lab engine pack
 
-Status: rebuilt host-preview prototype. It is not part of the v0.24 hardware
+Status: active recorded-input prototype. It is not part of the v0.24 hardware
 image and has not been approved for another device trial.
 
 Instrument Lab adds a fifth, optional eight-program engine without removing
@@ -46,14 +46,18 @@ forcing every sample onto an equal-tempered note grid.
 
 The resynthesizer no longer treats every instrument as a differently filtered
 saw or square oscillator. Bowed Ensemble, Cello, Violin, and Clarinet use a
-shared bounded waveguide with voice-specific excitation and damping. Organ,
-Brass, Bass, and Bell / Marimba use voice-specific additive partial models and
-percussive envelopes. Each voice has its own attack, release, excitation,
-partial balance, and speaker-friendly output filter.
+shared bounded waveguide with voice-specific excitation and damping. The
+waveguide is driven primarily by shaped noise and the player's envelope; only
+a small pickup-waveform component remains for articulation. Organ, Brass,
+Bass, and Bell / Marimba use voice-specific additive partial models and
+percussive envelopes. The organ has a drawbar-like sub/fifth spectrum rather
+than reusing the brass harmonic series. Each voice has its own attack, release,
+excitation, partial balance, output trim, and speaker-friendly filter.
 
 The panel-facing controls are:
 
-- **Transformation**: a meaningful near-dry-to-resynthesized sweep;
+- **Transformation**: a meaningful near-dry-to-resynthesized sweep, defaulting
+  to complete transformation;
 - **Character**: voice-specific brightness, bow pressure, register, or strike;
 - **Instrument Mix**: the explicit dry/resynthesized balance; and
 - **Tracking Sensitivity**: the input gate relative to the learned noise floor.
@@ -66,14 +70,21 @@ approval.
 
 ## Acceptance evidence
 
-The bundled raw DI fixture is no longer normalized and level matching is off
-for Instrument Lab. Across its eight voices the current default RMS level is
-approximately -2 dB to +1 dB relative to dry, except the intentionally
-percussive Bell / Marimba at about -6 dB. Peaks remain below 0.2 on that fixture;
-the rejected implementation was roughly +9 dB to +14 dB RMS and drove the
-Marshall rather than transforming the guitar cleanly. Automated tests require
-all eight renders to be finite, bounded, level-safe, and byte-distinct, and
-require both Transformation and Character to make material audible changes.
+The first trustworthy pedal recording exposed another failed assumption: the
+previous defaults changed samples but retained enough dry guitar to make the
+whole pack perceptually ineffective. Instrument Mix and Transformation now
+default to fully wet, sensitivity is matched to recorded pedal input, and saved
+slots using the exact old defaults are migrated automatically. The pickup no
+longer dominates the string waveguide excitation.
+
+The bundled raw DI fixture is not normalized and level matching is off for
+Instrument Lab. Across all eight voices the current default RMS level is about
+-1 dB to +1.2 dB relative to dry, with peaks below 0.35. Automated tests require
+all eight renders to be finite and level-safe. They also subtract the best-fit
+dry signal and require the resynthesized component to dominate every default,
+limit pairwise voice correlation so different labels cannot hide the same
+oscillator, and require both Transformation and Character to make material
+audible changes.
 
 Those host gates do not constitute hardware approval. Before another slot is
 flashed, the rebuilt version still needs:

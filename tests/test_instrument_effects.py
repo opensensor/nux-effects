@@ -77,7 +77,7 @@ int main(void)
             }
             if (effect_chain_process(&chain, &block) !=
                 EFFECT_RUNTIME_OK) return 7;
-            if (block_index > 500U) {
+            if (block_index > 10U) {
                 for (uint32_t frame = 0U; frame < 64U; ++frame) {
                     const float sample = mono[frame];
                     if (sample != sample || sample > 1.1F || sample < -1.1F)

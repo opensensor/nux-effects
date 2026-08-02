@@ -359,7 +359,12 @@ static float instrument_waveguide(
         context->waveguide[older] * fraction;
     context->voice_state.wave_tone += damping *
         (delayed - context->voice_state.wave_tone);
-    excitation = normalized_input * 0.12F + noise * 0.025F;
+    /* Excite the model from the player's envelope and articulation, but do
+     * not feed enough of the pickup waveform through the delay line for the
+     * result to collapse into a resonant guitar effect.  The earlier balance
+     * measured as strongly dry-correlated on real DI even at 100% mix. */
+    excitation = normalized_input * 0.018F +
+        noise * (0.042F + context->character * 0.026F);
     context->waveguide[context->waveguide_write] = instrument_soft_bound(
         excitation + context->voice_state.wave_tone * feedback);
     context->waveguide_write =
@@ -399,6 +404,7 @@ static float instrument_voice_sample(
     float ratios[6] = { 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F };
     float raw;
     float tone_coefficient;
+    float output_gain;
 
     switch (context->voice) {
     case INSTRUMENT_BOWED_ENSEMBLE:
@@ -410,6 +416,7 @@ static float instrument_voice_sample(
             instrument_sine(state->phase[0]) * 0.20F +
             instrument_sine(state->phase[1]) * 0.14F;
         tone_coefficient = 0.10F + brightness * 0.24F;
+        output_gain = 0.85F;
         break;
     case INSTRUMENT_CELLO:
         ratios[1] = 0.5F;
@@ -421,6 +428,7 @@ static float instrument_voice_sample(
             instrument_sine(state->phase[1]) * 0.20F +
             instrument_sine(state->phase[0]) * 0.15F;
         tone_coefficient = 0.075F + brightness * 0.17F;
+        output_gain = 0.95F;
         break;
     case INSTRUMENT_VIOLIN:
         ratios[1] = 2.0F;
@@ -432,14 +440,26 @@ static float instrument_voice_sample(
             instrument_sine(state->phase[1]) * (0.12F + brightness * 0.15F) +
             instrument_sine(state->phase[2]) * brightness * 0.10F;
         tone_coefficient = 0.14F + brightness * 0.34F;
+        output_gain = 1.00F;
         break;
     case INSTRUMENT_TONEWHEEL_ORGAN:
-        raw = instrument_sine(state->phase[0]) * 0.52F +
-            instrument_sine(state->phase[1]) * (0.12F + brightness * 0.18F) +
-            instrument_sine(state->phase[2]) * 0.13F +
-            instrument_sine(state->phase[3]) * brightness * 0.10F +
-            instrument_sine(state->phase[4]) * brightness * 0.06F;
+        /* Drawbar-like sub, fundamental, fifth, octave and upper drawbars.
+         * The non-integer fifth separates this voice from the saw-like brass
+         * spectrum instead of making both presets the same oscillator mix. */
+        ratios[0] = 0.5F;
+        ratios[1] = 1.0F;
+        ratios[2] = 1.5F;
+        ratios[3] = 2.0F;
+        ratios[4] = 3.0F;
+        ratios[5] = 4.0F;
+        raw = instrument_sine(state->phase[0]) * 0.18F +
+            instrument_sine(state->phase[1]) * 0.48F +
+            instrument_sine(state->phase[2]) * (0.08F + brightness * 0.16F) +
+            instrument_sine(state->phase[3]) * 0.13F +
+            instrument_sine(state->phase[4]) * brightness * 0.12F +
+            instrument_sine(state->phase[5]) * brightness * 0.08F;
         tone_coefficient = 0.22F + brightness * 0.38F;
+        output_gain = 0.56F;
         break;
     case INSTRUMENT_CLARINET:
         ratios[1] = 3.0F;
@@ -454,6 +474,7 @@ static float instrument_voice_sample(
             instrument_sine(state->phase[2]) * brightness * 0.10F +
             noise * context->input_envelope * 0.16F;
         tone_coefficient = 0.10F + brightness * 0.28F;
+        output_gain = 0.58F;
         break;
     case INSTRUMENT_SYNTH_BRASS:
         raw = instrument_sine(state->phase[0]) * 0.48F +
@@ -462,6 +483,7 @@ static float instrument_voice_sample(
             instrument_sine(state->phase[3]) * brightness * 0.10F;
         tone_coefficient = 0.08F + brightness * 0.32F +
             context->input_envelope * 0.35F;
+        output_gain = 0.62F;
         break;
     case INSTRUMENT_SYNTH_BASS:
         ratios[1] = 0.5F;
@@ -470,6 +492,7 @@ static float instrument_voice_sample(
             instrument_sine(state->phase[0]) * 0.42F +
             instrument_sine(state->phase[2]) * brightness * 0.20F;
         tone_coefficient = 0.07F + brightness * 0.20F;
+        output_gain = 0.50F;
         break;
     case INSTRUMENT_BELL_MARIMBA:
     default:
@@ -482,6 +505,7 @@ static float instrument_voice_sample(
             instrument_sine(state->phase[3]) * brightness * 0.08F;
         raw *= state->percussive_envelope;
         tone_coefficient = 0.16F + brightness * 0.38F;
+        output_gain = 2.10F;
         break;
     }
 
@@ -490,7 +514,7 @@ static float instrument_voice_sample(
         tone_coefficient, 0.05F, 0.62F);
     state->tone += tone_coefficient * (raw - state->tone);
     state->body += 0.0015F * (state->tone - state->body);
-    return state->tone - state->body * 0.22F;
+    return (state->tone - state->body * 0.22F) * output_gain;
 }
 
 static void instrument_update_note_state(
@@ -602,10 +626,10 @@ static uint16_t instrument_initialize_voice(
         ? UINT32_C(8)
         : INSTRUMENT_DECIMATION;
     context->voice = voice;
-    context->transformation = 0.72F;
+    context->transformation = 1.0F;
     context->character = 0.50F;
-    context->mix = 0.82F;
-    context->sensitivity = 0.010F;
+    context->mix = 1.0F;
+    context->sensitivity = 0.006F;
     instrument_clear_state(context);
     return EFFECT_RUNTIME_OK;
 }
@@ -760,7 +784,7 @@ static const effect_parameter_descriptor_t instrument_parameters[] = {
         "ratio",
         0.0F,
         1.0F,
-        0.72F,
+        1.0F,
     },
     {
         EFFECT_INSTRUMENT_PARAMETER_CHARACTER,
@@ -776,7 +800,7 @@ static const effect_parameter_descriptor_t instrument_parameters[] = {
         "ratio",
         0.0F,
         1.0F,
-        0.82F,
+        1.0F,
     },
     {
         EFFECT_INSTRUMENT_PARAMETER_SENSITIVITY,
@@ -784,7 +808,7 @@ static const effect_parameter_descriptor_t instrument_parameters[] = {
         "linear",
         0.001F,
         0.2F,
-        0.010F,
+        0.006F,
     },
 };
 

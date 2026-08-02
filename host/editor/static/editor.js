@@ -16,7 +16,8 @@ const STRING_FREQUENCIES = [82.41, 110.0, 146.83, 196.0, 246.94, 329.63];
 const WORKSPACE_STORAGE_KEY = "ncr2-open-effect-lab-workspace-v2";
 const AUDIO_INPUT_STORAGE_KEY = "ncr2-open-effect-lab-audio-input-v2";
 const REVIEW_STATUSES = new Set(["unreviewed", "keep", "tune", "replace"]);
-const HARDWARE_PRESET_VENDOR_ID = 0x4f50454e;
+const OPEN_VENDOR_ID = 0x4f50454e;
+const HARDWARE_PRESET_VENDOR_ID = OPEN_VENDOR_ID;
 const HARDWARE_PRESET_FIRST_ID = 0x0b000001;
 const HARDWARE_PRESET_COUNT = 32;
 const PEDAL_AUDIO_PRODUCT_NAME = "NCR-2 Open Pedal Audio";
@@ -58,7 +59,7 @@ const OPTIONAL_ENGINE_PACKS = [
     id: "instrument-lab",
     name: "Instrument Lab",
     summary:
-      "Monophonic pitch tracking and expressive resynthesis; bends remain continuous.",
+      "Full-wet monophonic instrument resynthesis by default; bends and playing dynamics remain continuous.",
     effects: [
       [0x100, "Bowed Ensemble"],
       [0x101, "Cello"],
@@ -282,6 +283,19 @@ function documentNode(node) {
       throw new Error("bank contains an invalid parameter value");
     }
     values[id] = value;
+  }
+  /* Migrate only the exact, shipped pre-audition defaults.  Any control the
+     user actually moved is preserved, while saved Instrument Lab slots stop
+     concealing the resynth behind the former 60%-effective wet blend. */
+  if (vendorId === OPEN_VENDOR_ID &&
+      effectId >= 0x100 && effectId <= 0x107 &&
+      Math.abs(values[1] - 0.72) < 1e-6 &&
+      Math.abs(values[2] - 0.50) < 1e-6 &&
+      Math.abs(values[3] - 0.82) < 1e-6 &&
+      Math.abs(values[4] - 0.010) < 1e-6) {
+    values[1] = 1.0;
+    values[3] = 1.0;
+    values[4] = 0.006;
   }
   return { vendorId, effectId, values };
 }
