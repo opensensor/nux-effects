@@ -45,6 +45,13 @@ how the same pieces can make bowed-string, organ-octave, and sitar-resonator
 starting points. Generated C remains available in a collapsed Advanced drawer,
 but understanding or editing it is not required.
 
+The **Additional engine packs** shelf is separate from the four-slot default
+bank. Its first pack, [Instrument Lab](INSTRUMENT_LAB.md), supplies eight
+pitch-tracked audio-resynthesis voices. Loading it into an editor slot is a
+reversible bank assignment and does not remove the original catalog. Device
+installation awaits the normal-application engine-assignment control plane;
+the page labels the action as preview-only.
+
 The primary listening signal is not synthesized. The page bundles a
 six-second, 48 kHz mono excerpt from the CC0 GuitarJam dataset: a clean
 electric guitar recorded directly into an audio interface. It preserves real

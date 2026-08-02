@@ -238,6 +238,7 @@ add_executable(
     app/src/startup.S
     app/src/effect_runtime.c
     app/src/effects_basic.c
+    app/src/effects_instrument.c
     app/src/main.c
     app/src/program_runtime.c
     app/src/program_selector.c
@@ -367,6 +368,7 @@ if(NCR2_BUILD_FACTORY_SLOT_APP)
         factory_slot/src/main.c
         app/src/effect_runtime.c
         app/src/effects_basic.c
+        app/src/effects_instrument.c
         app/src/program_runtime.c
         app/src/program_selector.c
         app/src/programs_builtin.c

@@ -97,6 +97,29 @@
       </div>
       <div class="effect-positions" id="effect-positions"
            aria-label="Effects in selected open engine"></div>
+      <div class="engine-pack-library">
+        <div>
+          <span class="eyebrow">Expandable catalog</span>
+          <h3>Additional engine packs</h3>
+          <p id="engine-pack-detail" class="panel-note"></p>
+        </div>
+        <label>
+          <span>Engine pack</span>
+          <select id="engine-pack-select"></select>
+        </label>
+        <label>
+          <span>Preview in open slot</span>
+          <select id="engine-pack-target">
+            <option value="0">5</option>
+            <option value="1">6</option>
+            <option value="2" selected>7</option>
+            <option value="3">8</option>
+          </select>
+        </label>
+        <button type="button" id="load-engine-pack" class="primary small">
+          Load for preview
+        </button>
+      </div>
       <div class="effect-review shadow-inner" aria-labelledby="review-title">
         <div class="review-head">
           <div>

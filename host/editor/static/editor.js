@@ -50,6 +50,25 @@ const OPEN_ENGINE_LAYOUT = [
   },
 ];
 
+const OPTIONAL_ENGINE_PACKS = [
+  {
+    id: "instrument-lab",
+    name: "Instrument Lab",
+    summary:
+      "Monophonic pitch tracking and expressive resynthesis; bends remain continuous.",
+    effects: [
+      [0x100, "Bowed Ensemble"],
+      [0x101, "Cello"],
+      [0x102, "Violin"],
+      [0x103, "Tonewheel Organ"],
+      [0x104, "Clarinet"],
+      [0x105, "Synth Brass"],
+      [0x106, "Synth Bass"],
+      [0x107, "Bell / Marimba"],
+    ],
+  },
+];
+
 function emptyProgram(engine, position) {
   return {
     name: OPEN_ENGINE_LAYOUT[engine].effects[position],
@@ -1496,10 +1515,13 @@ function renderChain() {
 
 function renderEngineBank() {
   document.querySelectorAll("[data-open-engine]").forEach((button) => {
-    const active = Number(button.dataset.openEngine) ===
+    const index = Number(button.dataset.openEngine);
+    const active = index ===
       state.activeOpenEngine;
     button.dataset.active = String(active);
     button.setAttribute("aria-pressed", String(active));
+    const name = button.querySelector("span");
+    if (name) name.textContent = state.openEngines[index].name;
   });
   dom.effectPositions.replaceChildren();
   state.openEngines[state.activeOpenEngine].effects.forEach(
@@ -1532,6 +1554,64 @@ function renderEngineBank() {
     },
   );
   renderReview();
+}
+
+function renderEnginePackLibrary() {
+  const pack = OPTIONAL_ENGINE_PACKS.find(
+    (candidate) => candidate.id === dom.enginePack.value,
+  ) ?? OPTIONAL_ENGINE_PACKS[0];
+  dom.enginePackDetail.textContent =
+    `${pack.summary} ${pack.effects.map(([, name]) => name).join(" · ")}`;
+}
+
+function loadEnginePack() {
+  const pack = OPTIONAL_ENGINE_PACKS.find(
+    (candidate) => candidate.id === dom.enginePack.value,
+  );
+  const engineIndex = Number(dom.enginePackTarget.value);
+  if (!pack || !Number.isInteger(engineIndex) ||
+      engineIndex < 0 || engineIndex >= state.openEngines.length) {
+    setStatus("choose a valid engine pack and open slot", "error");
+    return;
+  }
+  const resolved = pack.effects.map(([effectId, name]) => {
+    const effect = state.catalog.find((candidate) =>
+      candidate.vendor_id === state.session.vendor_open &&
+      candidate.effect_id === effectId);
+    if (!effect) {
+      throw new Error(`${name} is unavailable in this editor build`);
+    }
+    return { effect, name };
+  });
+  const engine = state.openEngines[engineIndex];
+  engine.name = pack.name;
+  engine.effects = resolved.map(({ effect, name }, position) => ({
+    name,
+    programId: ((engine.slot & 0xff) << 8) | (position + 1),
+    nodes: [{
+      vendorId: effect.vendor_id,
+      effectId: effect.effect_id,
+      values: Object.fromEntries(effect.parameters.map((parameter) => [
+        parameter.parameter_id,
+        parameter.default_value,
+      ])),
+    }],
+    factoryPresetIndex: engineIndex * 8 + position,
+    review: { status: "unreviewed", notes: "" },
+  }));
+  state.activeOpenEngine = engineIndex;
+  state.activeEffectPosition = 0;
+  state.program = engine.effects[0];
+  query("program-name").value = state.program.name;
+  query("program-id").value = formatHex(state.program.programId);
+  renderEngineBank();
+  renderChain();
+  persistWorkspace();
+  scheduleRender();
+  setStatus(
+    `${pack.name} loaded into editor slot ${engine.slot}; existing catalog retained`,
+    "ok",
+  );
 }
 
 function reviewInventory() {
@@ -2347,6 +2427,9 @@ function bind() {
   dom.dfuInstall = query("dfu-install");
   dom.dfuProgress = query("dfu-progress");
   dom.dfuDetail = query("dfu-detail");
+  dom.enginePack = query("engine-pack-select");
+  dom.enginePackTarget = query("engine-pack-target");
+  dom.enginePackDetail = query("engine-pack-detail");
   dom.visualSelect = query("visual-effect-select");
   dom.visualName = query("visual-name");
   dom.visualEffectId = query("visual-effect-id");
@@ -2364,6 +2447,14 @@ function bind() {
     ));
   });
   query("load-defaults").addEventListener("click", loadFirmwareDefaults);
+  dom.enginePack.addEventListener("change", renderEnginePackLibrary);
+  query("load-engine-pack").addEventListener("click", () => {
+    try {
+      loadEnginePack();
+    } catch (error) {
+      setStatus(error.message, "error");
+    }
+  });
   query("import-bank").addEventListener("click", () => dom.bankFile.click());
   query("export-bank").addEventListener("click", exportEngineBank);
   dom.bankFile.addEventListener("change", () => {
@@ -2601,6 +2692,13 @@ async function start() {
     `${state.inputLevelDb >= 0 ? "" : "−"}${Math.abs(state.inputLevelDb)} dB`;
   query("program-name").value = state.program.name;
   renderEngineBank();
+  OPTIONAL_ENGINE_PACKS.forEach((pack) => {
+    const option = document.createElement("option");
+    option.value = pack.id;
+    option.textContent = pack.name;
+    dom.enginePack.append(option);
+  });
+  renderEnginePackLibrary();
   renderSourceList();
   updateMetrics(null);
   updateLevelMatchNote();

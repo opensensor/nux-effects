@@ -2,7 +2,7 @@
 
 The editor never re-implements an effect in another language. Every
 preview links `firmware/app/src/effect_runtime.c`,
-`firmware/app/src/program_runtime.c`, and `firmware/app/src/effects_basic.c`
+`firmware/app/src/program_runtime.c`, shipped effects, and authored sources
 with the session's authored sources and a generated configuration unit, so
 what the page plays is what the chain computes.
 
@@ -37,6 +37,7 @@ FIRMWARE_SOURCES = (
     APP_SOURCE / "effect_runtime.c",
     APP_SOURCE / "program_runtime.c",
     APP_SOURCE / "effects_basic.c",
+    APP_SOURCE / "effects_instrument.c",
 )
 
 COMPILE_FLAGS = (

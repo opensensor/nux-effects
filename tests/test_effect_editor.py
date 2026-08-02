@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import math
 import shutil
 import struct
 import subprocess
@@ -155,6 +156,32 @@ class CodegenTests(unittest.TestCase):
                 codegen.ProgramSpec("Empty", 1, ()), []
             )
 
+    def test_instrument_exports_use_the_shipped_public_identity(self):
+        effect = {
+            "name": "Instrument · Tonewheel Organ",
+            "vendor_id": codegen.VENDOR_OPEN,
+            "effect_id": 0x103,
+            "parameters": [
+                {"parameter_id": 1, "name": "Articulation"},
+                {"parameter_id": 3, "name": "Instrument mix"},
+            ],
+        }
+        program = codegen.ProgramSpec(
+            "Organ",
+            11,
+            (
+                codegen.ProgramNode(
+                    codegen.VENDOR_OPEN,
+                    0x103,
+                    ((1, 0.4), (3, 0.8)),
+                ),
+            ),
+        )
+        source = codegen.generate_program_source(program, [effect])
+        self.assertIn('#include "effects_instrument.h"', source)
+        self.assertIn("EFFECT_OPEN_TONEWHEEL_ORGAN_ID", source)
+        self.assertIn("EFFECT_INSTRUMENT_PARAMETER_ARTICULATION", source)
+
 
 class RealTimeRuleTests(unittest.TestCase):
     def test_allocation_and_formatting_are_flagged(self):
@@ -299,6 +326,9 @@ class BrowserBankAndDfuTests(unittest.TestCase):
         self.assertIn('id="dfu-connect"', page)
         self.assertIn('id="dfu-install"', page)
         self.assertIn("OPEN_ENGINE_LAYOUT", script)
+        self.assertIn("OPTIONAL_ENGINE_PACKS", script)
+        self.assertIn('id="engine-pack-select"', page)
+        self.assertIn('id="load-engine-pack"', page)
         self.assertIn('schema: "ncr2-open-engine-bank"', script)
         self.assertIn("version: 3", script)
         self.assertIn("WORKSPACE_STORAGE_KEY", script)
@@ -496,9 +526,10 @@ class HostRenderTests(unittest.TestCase):
         catalog = self.builder.catalog(result.binary)
         self.assertTrue(catalog.ok, catalog.error)
         names = [effect["name"] for effect in catalog.report["effects"]]
-        self.assertEqual(
-            names, ["Basic Gain", "Basic Soft Clip", "Tape Sat"]
-        )
+        self.assertEqual(names[:2], ["Basic Gain", "Basic Soft Clip"])
+        self.assertIn("Instrument · Bowed Ensemble", names)
+        self.assertIn("Instrument · Bell / Marimba", names)
+        self.assertEqual(names[-1], "Tape Sat")
 
         verified = self.builder.verify(result.binary, 48000, 64, 2)
         self.assertEqual(verified.report["catalog_status"], 0)
@@ -632,6 +663,55 @@ class HostRenderTests(unittest.TestCase):
         self.assertEqual(drive["maximum"], 32.0)
         self.assertEqual(json.loads(json.dumps(drive))["default_value"], 1.0)
 
+    def test_instrument_tracker_follows_expressive_input_pitch(self):
+        node = codegen.ProgramNode(
+            codegen.VENDOR_OPEN,
+            0x103,
+            ((1, 0.1), (2, 0.55), (3, 1.0), (4, 0.003)),
+        )
+        result = self.build(
+            [],
+            codegen.ProgramSpec("Tonewheel", 10, (node,)),
+        )
+        for expected in (110.0, 220.0, 440.0, 880.0):
+            frames = 48000
+            payload = struct.pack(
+                f"<{frames}f",
+                *(
+                    0.2 * math.sin(2.0 * math.pi * expected * frame / 48000.0)
+                    for frame in range(frames)
+                ),
+            )
+            rendered = self.builder.render(
+                result.binary,
+                payload,
+                48000,
+                64,
+                1,
+            )
+            self.assertTrue(rendered.ok, rendered.error)
+            tail = samples(rendered.audio)[-8192:]
+            best_frequency = 0.0
+            best_power = -1.0
+            lower = max(65, int(expected * 0.8))
+            upper = min(1400, int(expected * 1.2))
+            for frequency in range(lower, upper + 1, 2):
+                real = 0.0
+                imaginary = 0.0
+                for index, value in enumerate(tail):
+                    angle = 2.0 * math.pi * frequency * index / 48000.0
+                    real += value * math.cos(angle)
+                    imaginary -= value * math.sin(angle)
+                power = real * real + imaginary * imaginary
+                if power > best_power:
+                    best_power = power
+                    best_frequency = float(frequency)
+            self.assertLess(
+                abs(best_frequency - expected) / expected,
+                0.04,
+                (expected, best_frequency),
+            )
+
 
 @unittest.skipUnless(
     hardware_app.available(),
@@ -749,8 +829,21 @@ class HardwareAppRenderTests(unittest.TestCase):
 
         self.assertEqual(catalog.report["registry_status"], 0)
         names = [effect["name"] for effect in catalog.report["effects"]]
-        self.assertEqual(names[2:], list(hardware_app.PRESET_NAMES))
-        preset = catalog.report["effects"][2]
+        self.assertEqual(names[10:], list(hardware_app.PRESET_NAMES))
+        self.assertEqual(
+            names[2:10],
+            [
+                "Instrument · Bowed Ensemble",
+                "Instrument · Cello",
+                "Instrument · Violin",
+                "Instrument · Tonewheel Organ",
+                "Instrument · Clarinet",
+                "Instrument · Synth Brass",
+                "Instrument · Synth Bass",
+                "Instrument · Bell / Marimba",
+            ],
+        )
+        preset = catalog.report["effects"][10]
         self.assertEqual(
             [parameter["name"] for parameter in preset["parameters"]],
             ["Amount", "Character", "Level"],

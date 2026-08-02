@@ -624,6 +624,38 @@ main {
   justify-content: flex-end;
 }
 
+.engine-pack-library {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(150px, 0.35fr)
+    minmax(120px, 0.25fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-radius: 8px;
+}
+
+.engine-pack-library h3 {
+  margin: 0;
+  font-size: 12px;
+}
+
+.engine-pack-library label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .engine-pack-library {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .engine-slot,
 .effect-position {
   min-width: 0;
