@@ -58,13 +58,27 @@ electric guitar recorded directly into an audio interface. It preserves real
 pick attacks, fret transitions, pickup harmonics, and playing dynamics. The
 older physical-model pluck and chord remain explicitly labeled diagnostic
 signals, while file capture, six-second raw microphone capture, and live audio
-input allow testing a particular guitar and playing style. The input picker
-lists browser audio devices and automatically prefers **NCR-2 Open Pedal
-Audio** when that normal-application firmware is connected; a user can still
-choose the system default or any other interface explicitly. Browser
-automatic gain control, echo cancellation, and noise suppression are requested
-off for both microphone paths, and captured or uploaded audio is not
-normalized. The Input trim is therefore an explicit part of the audition.
+input allow testing a particular guitar and playing style. On Linux, the input
+picker automatically prefers **Pedal USB — direct** when the normal-application
+firmware is connected. The local server identifies the pedal through ALSA and
+captures its exact 48 kHz/24-bit mono stream, so Chromium microphone permission
+and device enumeration are not involved. A user can still choose the system
+default or any browser audio device explicitly. Browser automatic gain
+control, echo cancellation, and noise suppression are requested off for those
+fallback inputs, and captured or uploaded audio is not normalized. The Input
+trim is therefore an explicit part of the audition. Physical measurement of
+the bench pedal found played-guitar peak/RMS about 17 dB below the bundled DI,
+so direct pedal capture applies a visible, fixed +18 dB calibration before the
+user's Input trim. This puts live input in the amplitude range used to author
+the effects without changing browser-interface or file playback levels.
+The server also overrides ALSA's unsuitable 125 ms default period with a
+256-frame period and 1,024-frame buffer; this is essential to prevent bursty
+capture from masquerading as reverb or heavy output delay.
+
+The explicit **Record input** transport captures 6, 15, 30, or 60 seconds and
+then selects that take as the test signal automatically. Recorded audition
+bypasses the live scheduler, making a longer loop a practical fallback and a
+clean way to distinguish input/DSP quality from live transport behavior.
 
 Level-matched auditioning applies a bounded, peak-safe gain only in the Web
 Audio playback mixer. It is off by default, and loading Instrument Lab turns
@@ -128,12 +142,19 @@ Both are the same code with the same validation; a host test asserts
 they render identical samples for the same settings.
 
 The **Play live input** control provides continuous guitar monitoring through
-the native firmware C. The browser asks for the selected raw mono audio input,
-sends bounded 1024-frame chunks to a persistent native process on localhost,
-and schedules the returned audio for playback. The process retains tracker,
-delay, envelope, and oscillator state between chunks. This is deliberately the
-same compiled effect chain as offline preview, not a JavaScript approximation.
-Moving an effect control replaces the native session after a short debounce.
+the native firmware C. For the direct pedal source, the local server reads
+bounded 1024-frame ALSA chunks, converts packed PCM24 to float32, processes
+them in one persistent native process, and returns them for timestamped Web
+Audio playback with an 80 ms scheduling cushion. Browser microphone inputs use
+the same bounded 1024-frame chunk size. An experimental AudioWorklet ring was
+rejected after physical testing: its refill/clock-correction behavior colored
+otherwise-clean dry capture.
+The process retains tracker, delay, envelope, and oscillator state between
+chunks. This is deliberately the same compiled effect chain as offline
+preview, not a JavaScript approximation. Moving an effect control replaces the
+native session after a short debounce. **Hear dry / Hear processed** also works
+during live input while the DSP continues advancing, making transport tone and
+effect tone directly comparable without restarting the session.
 
 This localhost round trip is an audition path, not a stage monitor: it has more
 latency than the pedal and may drop old chunks rather than build an ever-growing
@@ -146,9 +167,10 @@ computer. The separately gated normal hardware application now has a UAC1
 capture path that presents the pedal's dry 48 kHz/24-bit mono input as
 **NCR-2 Open Pedal Audio**; see
 [USB_AUDIO.md](../hardware/USB_AUDIO.md). The v0.26.0 bench build has completed
-physical high-speed enumeration and sustained ALSA capture. Played-guitar and
-browser audition remain to be checked, and its temporary bench identity must
-be replaced by a project-owned USB identity before a release.
+physical high-speed enumeration, sustained ALSA capture, direct editor
+recording, and persistent native-DSP transport. Audible played-guitar tone and
+latency remain listening checks, and its temporary bench identity must be
+replaced by a project-owned USB identity before a release.
 
 Open Recover itself cannot provide live playing: recovery mode deliberately
 does not initialize the analog audio engine, and its HID interface carries

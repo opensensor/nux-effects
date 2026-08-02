@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,7 @@ builder = _load("builder")
 rt_rules = _load("rt_rules")
 hardware_app = _load("hardware_app")
 visual_effect = _load("visual_effect")
+pedal_audio = _load("pedal_audio")
 server = _load("server")
 
 
@@ -238,6 +240,46 @@ class ServerHelperTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             server.build_server("0.0.0.0", 8765, Path("/tmp"))
 
+
+class PedalAudioTests(unittest.TestCase):
+    def test_discovers_the_pedal_by_usb_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            card = Path(directory) / "card4"
+            card.mkdir()
+            (card / "usbid").write_text("cafe:4e58\n")
+            (card / "id").write_text("NCR2\n")
+            with mock.patch.object(
+                pedal_audio.shutil, "which", return_value="/usr/bin/arecord"
+            ):
+                descriptor = pedal_audio.discover(Path(directory))
+
+        self.assertTrue(descriptor["available"])
+        self.assertEqual(descriptor["device"], "hw:4,0")
+        self.assertEqual(descriptor["card_id"], "NCR2")
+        self.assertEqual(descriptor["sample_rate"], 48000)
+        self.assertEqual(pedal_audio.CAPTURE_PERIOD_FRAMES, 256)
+        self.assertEqual(pedal_audio.CAPTURE_BUFFER_FRAMES, 1024)
+
+    def test_packed_pcm24_is_converted_and_duplicated(self):
+        packed = bytes.fromhex("000080 000000 ffff7f")
+        converted = pedal_audio.pcm24_to_float32(packed, 2)
+        values = struct.unpack("<6f", converted)
+
+        self.assertEqual(values[0:2], (-1.0, -1.0))
+        self.assertEqual(values[2:4], (0.0, 0.0))
+        self.assertAlmostEqual(values[4], 1.0, places=6)
+        self.assertEqual(values[4], values[5])
+
+    def test_rejects_partial_or_invalid_capture_formats(self):
+        with self.assertRaisesRegex(
+            pedal_audio.PedalAudioError, "partial PCM24"
+        ):
+            pedal_audio.pcm24_to_float32(b"\x00", 1)
+        with self.assertRaisesRegex(
+            pedal_audio.PedalAudioError, "mono or stereo"
+        ):
+            pedal_audio.pcm24_to_float32(b"\x00\x00\x00", 3)
+
     def test_program_json_round_trips_into_a_specification(self):
         program = server.program_from_json(
             {
@@ -327,7 +369,10 @@ class BrowserBankAndDfuTests(unittest.TestCase):
         self.assertIn('id="live-input"', page)
         self.assertIn('id="audio-input-device"', page)
         self.assertIn('id="refresh-audio-inputs"', page)
-        self.assertIn("Record 6 s from guitar / audio input", page)
+        self.assertIn('id="record-input"', page)
+        self.assertIn('id="record-seconds"', page)
+        self.assertIn('<option value="60">60 s</option>', page)
+        self.assertIn("Recorded guitar / audio input", page)
         self.assertIn('value="guitar"', page)
         self.assertIn('id="dfu-connect"', page)
         self.assertIn('id="dfu-install"', page)
@@ -341,6 +386,12 @@ class BrowserBankAndDfuTests(unittest.TestCase):
         self.assertIn("clean-guitar-di.wav", script)
         self.assertIn("/api/live/start", script)
         self.assertIn("/api/live/chunk", script)
+        self.assertIn("/api/live/pedal-chunk", script)
+        self.assertIn("/api/pedal/record", script)
+        self.assertIn('"pedal-alsa"', script)
+        self.assertIn("direct (recommended)", script)
+        self.assertIn("PEDAL_CAPTURE_GAIN_DB = 18", script)
+        self.assertIn("pedal +${PEDAL_CAPTURE_GAIN_DB} dB calibrated", script)
         self.assertIn("autoGainControl: false", script)
         self.assertIn("NCR-2 Open Pedal Audio", script)
         self.assertIn("enumerateDevices()", script)

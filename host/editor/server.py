@@ -6,7 +6,8 @@ lets an effect be written in C, and previews the result by compiling and
 running `firmware/app`'s own runtime on this machine. It never opens a USB
 device, never writes to the repository, and never flashes anything.
 
-It does compile and execute C that the browser page submits, which is the
+It can capture the local NCR-2 ALSA source, and it compiles and executes C
+that the browser page submits, which is the
 point of the tool and also its risk: run it on loopback only, on a machine
 you trust, and treat it as a development tool rather than a service.
 
@@ -21,6 +22,8 @@ import io
 import json
 import re
 import secrets
+import select
+import socket
 import struct
 import sys
 import threading
@@ -35,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import builder as builder_module  # noqa: E402
 import codegen  # noqa: E402
 import hardware_app  # noqa: E402
+import pedal_audio  # noqa: E402
 import rt_rules  # noqa: E402
 import visual_effect  # noqa: E402
 
@@ -141,10 +145,14 @@ class EditorSession:
         self._order: list[str] = []
         self.live: builder_module.LiveProcess | None = None
         self.live_token: str | None = None
+        self.pedal_capture: pedal_audio.PedalCapture | None = None
 
     def stop_live_locked(self) -> None:
+        if self.pedal_capture is not None:
+            self.pedal_capture.stop()
         if self.live is not None:
             self.live.stop()
+        self.pedal_capture = None
         self.live = None
         self.live_token = None
 
@@ -236,6 +244,11 @@ class EditorHandler(BaseHTTPRequestHandler):
     program_status_names: dict[int, str]
 
     def log_message(self, format: str, *args: Any) -> None:
+        if self.path.split("?", 1)[0] in {
+            "/api/live/chunk",
+            "/api/live/pedal-chunk",
+        }:
+            return
         sys.stderr.write(
             f"{self.address_string()} {format % args}\n"
         )
@@ -272,7 +285,10 @@ class EditorHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _send_json(self, payload: Any, status: int = 200) -> None:
         self._send(
@@ -288,6 +304,19 @@ class EditorHandler(BaseHTTPRequestHandler):
         body.write(encoded)
         body.write(payload)
         self._send(body.getvalue(), "application/octet-stream")
+
+    def _client_disconnected(self) -> bool:
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            if not readable:
+                return False
+            return self.connection.recv(
+                1, socket.MSG_PEEK | socket.MSG_DONTWAIT
+            ) == b""
+        except BlockingIOError:
+            return False
+        except OSError:
+            return True
 
     # Routing --------------------------------------------------------
 
@@ -328,8 +357,12 @@ class EditorHandler(BaseHTTPRequestHandler):
                 self._handle_live_start()
             elif path == "/api/live/chunk":
                 self._handle_live_chunk()
+            elif path == "/api/live/pedal-chunk":
+                self._handle_live_pedal_chunk()
             elif path == "/api/live/stop":
                 self._handle_live_stop()
+            elif path == "/api/pedal/record":
+                self._handle_pedal_record()
             elif path == "/api/export":
                 self._handle_export()
             elif path == "/api/visual-source":
@@ -340,6 +373,7 @@ class EditorHandler(BaseHTTPRequestHandler):
             builder_module.BuildError,
             codegen.CodegenError,
             hardware_app.ExtractionError,
+            pedal_audio.PedalAudioError,
             KeyError,
             TypeError,
             ValueError,
@@ -386,6 +420,7 @@ class EditorHandler(BaseHTTPRequestHandler):
                     for rule in rt_rules.RULES
                 ],
                 "hardware_app": hardware_app.describe(),
+                "pedal_audio": pedal_audio.discover(),
             }
         )
 
@@ -586,6 +621,12 @@ class EditorHandler(BaseHTTPRequestHandler):
             token = secrets.token_hex(16)
             self.session.live = live
             self.session.live_token = token
+            if request.get("input_mode") == "pedal-alsa":
+                try:
+                    self.session.pedal_capture = pedal_audio.PedalCapture.open()
+                except pedal_audio.PedalAudioError:
+                    self.session.stop_live_locked()
+                    raise
         payload.update(
             {
                 "status": "ready",
@@ -626,6 +667,47 @@ class EditorHandler(BaseHTTPRequestHandler):
                 raise
         self._send_frame({"status": "ok"}, rendered)
 
+    def _handle_live_pedal_chunk(self) -> None:
+        body = self._read_body()
+        if len(body) < FRAME_HEADER.size:
+            raise ValueError("truncated pedal capture request")
+        (header_length,) = FRAME_HEADER.unpack_from(body, 0)
+        start = FRAME_HEADER.size
+        if start + header_length > len(body):
+            raise ValueError("truncated pedal capture header")
+        request = json.loads(body[start:start + header_length].decode())
+        token = str(request.get("token") or "")
+        frames = int(request.get("frames", 1024))
+        channels = int(request.get("channels", 2))
+        gain_db = float(request.get("gain_db", 0.0))
+        monitor = str(request.get("monitor") or "wet")
+        if monitor not in {"dry", "wet"}:
+            raise ValueError("pedal preview monitor must be dry or wet")
+        with self.session.lock:
+            if (
+                self.session.live is None
+                or self.session.pedal_capture is None
+                or not token
+                or token != self.session.live_token
+            ):
+                self._send_frame(
+                    {"status": "not-running", "error": "pedal preview expired"},
+                    b"",
+                )
+                return
+            try:
+                audio = self.session.pedal_capture.read_float32(
+                    frames, channels, gain_db
+                )
+                rendered = self.session.live.process_audio(audio)
+            except (builder_module.BuildError, pedal_audio.PedalAudioError):
+                self.session.stop_live_locked()
+                raise
+        self._send_frame(
+            {"status": "ok", "monitor": monitor},
+            audio if monitor == "dry" else rendered,
+        )
+
     def _handle_live_stop(self) -> None:
         request = json.loads(self._read_body() or b"{}")
         token = str(request.get("token") or "")
@@ -634,6 +716,49 @@ class EditorHandler(BaseHTTPRequestHandler):
             if stopped:
                 self.session.stop_live_locked()
         self._send_json({"status": "stopped", "matched": stopped})
+
+    def _handle_pedal_record(self) -> None:
+        body = self._read_body()
+        if len(body) < FRAME_HEADER.size:
+            raise ValueError("truncated pedal recording request")
+        (header_length,) = FRAME_HEADER.unpack_from(body, 0)
+        start = FRAME_HEADER.size
+        if start + header_length > len(body):
+            raise ValueError("truncated pedal recording header")
+        request = json.loads(body[start:start + header_length].decode())
+        seconds = float(request.get("seconds", 6.0))
+        gain_db = float(request.get("gain_db", 0.0))
+        if not 0.1 <= seconds <= 60.0:
+            raise ValueError("pedal recordings must be 0.1 to 60 seconds")
+        remaining = round(seconds * pedal_audio.SAMPLE_RATE)
+        chunks: list[bytes] = []
+        abandoned = False
+        with self.session.lock:
+            if self.session.live is not None:
+                raise ValueError("stop live input before recording the pedal")
+            capture = pedal_audio.PedalCapture.open()
+            try:
+                while remaining:
+                    if self._client_disconnected():
+                        abandoned = True
+                        break
+                    frames = min(remaining, 4096)
+                    chunks.append(capture.read_float32(frames, 1, gain_db))
+                    remaining -= frames
+            finally:
+                capture.stop()
+        if abandoned:
+            return
+        audio = b"".join(chunks)
+        self._send_frame(
+            {
+                "status": "ok",
+                "sample_rate": pedal_audio.SAMPLE_RATE,
+                "channels": 1,
+                "frames": len(audio) // 4,
+            },
+            audio,
+        )
 
     def _handle_export(self) -> None:
         request = json.loads(self._read_body() or b"{}")

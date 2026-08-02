@@ -5,7 +5,7 @@ connected to the pedal as a standard USB Audio Class 1 capture device. This is
 the pedal-first editor path:
 
 ```text
-guitar -> NCR-2 analog input -> AK4619/SAI1 -> USB-C -> browser editor
+guitar -> NCR-2 analog input -> AK4619/SAI1 -> USB-C -> local editor
                                       `-----> pedal DSP -> analog output
 ```
 
@@ -77,18 +77,40 @@ The normal app then:
 
 No guitar was played during that recording, so its approximately -89 dBFS
 peak represents idle capture, not validation of musical signal level or sound
-quality. A played-guitar recording and browser live-preview audition remain
-the next physical checks. The `cafe:4e58` identity is bench-only and must be
-replaced with a project-owned VID/PID before distribution.
+quality. The local editor has since passed direct recording and a persistent
+native-DSP transport check against this physical device: ten consecutive
+chunks totaling 10,240 frames were captured, processed, and returned without
+a transport error. Audible guitar tone and latency remain listening checks,
+not conclusions from that transport test. The `cafe:4e58` identity is
+bench-only and must be replaced with a project-owned VID/PID before
+distribution.
 
 ## Editor behavior
 
-The editor lists all browser `audioinput` devices. Its automatic choice
-prefers the product string above after capture permission reveals device
-labels. The selector also supports the system default and ordinary audio
-interfaces. Both six-second recording and stateful live preview use the same
-selection and request raw capture with browser gain control, echo cancellation,
-and noise suppression disabled.
+On Linux, the editor server resolves the pedal's dynamic ALSA card number from
+USB identity `cafe:4e58` and product string, then exposes **Pedal USB — direct**
+as the preferred input. Direct capture uses `arecord` with the device's exact
+48 kHz, mono, packed-24-bit contract and does not depend on Chromium exposing
+the pedal or granting microphone permission. Both six-second recording and
+stateful live preview support this path.
+
+The selector also lists browser `audioinput` devices for ordinary interfaces
+and non-Linux fallback. Those requests disable browser gain control, echo
+cancellation, and noise suppression. The direct pedal path converts packed
+PCM24 to float32, duplicates mono only when the selected preview format is
+stereo, applies a measured +18 dB pedal calibration, and then applies the
+editor's explicit Input trim before native DSP. An eight-second physical
+capture measured played-guitar peak/RMS at approximately 0.027/0.005 versus
+0.204/0.033 for the bundled clean DI. It contained no large discontinuities;
+one 47-frame zero pad occurred at capture startup.
+
+ALSA otherwise chooses a 6,000-frame/125 ms capture period and a 24,000-frame
+buffer for this endpoint. That default made localhost requests alternate
+between sub-millisecond bursts and 120–132 ms stalls, producing severe
+mute/refill modulation and accumulated delay in live playback. Direct editor
+capture therefore requests a 256-frame period and 1,024-frame buffer. On the
+physical pedal, 300 consecutive 1,024-frame reads then measured 21.0 ms median,
+22.0 ms p95, and 28.5 ms maximum against the ideal 21.33 ms cadence.
 
 USB Audio only transports dry guitar into the browser today. Effect parameters
 still run in the editor's persistent native preview process. A later composite

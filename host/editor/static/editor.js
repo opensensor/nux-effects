@@ -14,12 +14,13 @@ const DEBOUNCE_MS = 140;
 const FFT_SIZE = 4096;
 const STRING_FREQUENCIES = [82.41, 110.0, 146.83, 196.0, 246.94, 329.63];
 const WORKSPACE_STORAGE_KEY = "ncr2-open-effect-lab-workspace-v2";
-const AUDIO_INPUT_STORAGE_KEY = "ncr2-open-effect-lab-audio-input-v1";
+const AUDIO_INPUT_STORAGE_KEY = "ncr2-open-effect-lab-audio-input-v2";
 const REVIEW_STATUSES = new Set(["unreviewed", "keep", "tune", "replace"]);
 const HARDWARE_PRESET_VENDOR_ID = 0x4f50454e;
 const HARDWARE_PRESET_FIRST_ID = 0x0b000001;
 const HARDWARE_PRESET_COUNT = 32;
 const PEDAL_AUDIO_PRODUCT_NAME = "NCR-2 Open Pedal Audio";
+const PEDAL_CAPTURE_GAIN_DB = 18;
 
 const OPEN_ENGINE_LAYOUT = [
   {
@@ -120,6 +121,7 @@ const state = {
   guitarBytes: null,
   guitarAudio: null,
   audioInputDeviceId: "auto",
+  pedalAudio: null,
   includeHardwareApp: false,
   dfu: null,
   dfuInfo: null,
@@ -145,6 +147,21 @@ function parseNumber(text, fallback) {
     ? Number.parseInt(trimmed, 16)
     : Number.parseInt(trimmed, 10);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function inputLevelText() {
+  const trim = `${state.inputLevelDb >= 0 ? "+" : "−"}` +
+    `${Math.abs(state.inputLevelDb)} dB`;
+  return state.audioInputDeviceId === "pedal-alsa"
+    ? `${trim} · pedal +${PEDAL_CAPTURE_GAIN_DB} dB calibrated`
+    : trim;
+}
+
+function updateInputLevelControl() {
+  const control = query("input-level");
+  const label = query("input-level-value");
+  if (control) control.value = String(state.inputLevelDb);
+  if (label) label.textContent = inputLevelText();
 }
 
 /** Descriptor bounds arrive as float32; show them without the noise. */
@@ -634,6 +651,17 @@ async function loadBundledGuitar() {
 }
 
 async function captureMicrophone(seconds = 6.0) {
+  if (state.audioInputDeviceId === "pedal-alsa") {
+    const result = await postFrame(
+      "/api/pedal/record",
+      { seconds, gain_db: PEDAL_CAPTURE_GAIN_DB },
+      null,
+    );
+    if (result.meta.status !== "ok") {
+      throw new Error(result.meta.error || "direct pedal recording stopped");
+    }
+    return result.audio;
+  }
   const stream = await acquireAudioInput();
   const context = new AudioContext({ sampleRate: state.sampleRate });
   const source = context.createMediaStreamSource(stream);
@@ -691,6 +719,7 @@ const livePreview = {
   nextStart: 0,
   dropped: 0,
   deviceLabel: "",
+  inputMode: "browser",
 };
 let liveRestartTimer = null;
 
@@ -701,7 +730,7 @@ function audioInputConstraints(deviceId = state.audioInputDeviceId) {
     noiseSuppression: false,
     channelCount: 1,
     sampleRate: state.sampleRate,
-    ...(!["auto", "default", ""].includes(deviceId)
+    ...(!["auto", "default", "pedal-alsa", ""].includes(deviceId)
       ? { deviceId: { exact: deviceId } }
       : {}),
   };
@@ -713,19 +742,27 @@ function selectedAudioInputLabel() {
 }
 
 async function refreshAudioInputDevices(preferredId = state.audioInputDeviceId) {
-  if (!dom.audioInputDevice || !navigator.mediaDevices?.enumerateDevices) {
-    return;
-  }
-  const devices = (await navigator.mediaDevices.enumerateDevices())
-    .filter((device) => device.kind === "audioinput" &&
-      !["default", "communications"].includes(device.deviceId));
+  if (!dom.audioInputDevice) return;
+  const devices = navigator.mediaDevices?.enumerateDevices
+    ? (await navigator.mediaDevices.enumerateDevices())
+      .filter((device) => device.kind === "audioinput" &&
+        !["default", "communications"].includes(device.deviceId))
+    : [];
   const autoOption = document.createElement("option");
   autoOption.value = "auto";
   autoOption.textContent = "Auto-detect pedal / system default";
   const defaultOption = document.createElement("option");
   defaultOption.value = "default";
   defaultOption.textContent = "System default audio input";
-  dom.audioInputDevice.replaceChildren(autoOption, defaultOption);
+  const options = [autoOption];
+  if (state.pedalAudio?.available) {
+    const pedalOption = document.createElement("option");
+    pedalOption.value = "pedal-alsa";
+    pedalOption.textContent = "Pedal USB — direct (recommended)";
+    options.push(pedalOption);
+  }
+  options.push(defaultOption);
+  dom.audioInputDevice.replaceChildren(...options);
   devices.forEach((device, index) => {
     const option = document.createElement("option");
     option.value = device.deviceId;
@@ -734,23 +771,34 @@ async function refreshAudioInputDevices(preferredId = state.audioInputDeviceId) 
   });
 
   let selected = preferredId;
-  if (!["auto", "default"].includes(selected) &&
+  const specialInputs = ["auto", "default", "pedal-alsa"];
+  if (selected === "pedal-alsa" && !state.pedalAudio?.available) {
+    selected = "auto";
+  } else if (!specialInputs.includes(selected) &&
       !devices.some((device) => device.deviceId === selected)) {
     selected = "auto";
   }
   if (selected === "auto") {
-    const pedal = devices.find((device) =>
-      device.label.toLowerCase().includes(
-        PEDAL_AUDIO_PRODUCT_NAME.toLowerCase(),
-      ));
-    if (pedal) selected = pedal.deviceId;
+    if (state.pedalAudio?.available) {
+      selected = "pedal-alsa";
+    } else {
+      const pedal = devices.find((device) =>
+        device.label.toLowerCase().includes(
+          PEDAL_AUDIO_PRODUCT_NAME.toLowerCase(),
+        ));
+      if (pedal) selected = pedal.deviceId;
+    }
   }
   state.audioInputDeviceId = selected;
   dom.audioInputDevice.value = selected;
+  updateInputLevelControl();
   persistWorkspace();
 }
 
 async function acquireAudioInput() {
+  if (state.audioInputDeviceId === "pedal-alsa") {
+    throw new Error("direct pedal audio must be captured by the local server");
+  }
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("this browser does not expose audio capture");
   }
@@ -793,7 +841,7 @@ function updateLivePreviewState(message = "") {
   if (dom.liveInputState) {
     dom.liveInputState.textContent = message || (livePreview.active
       ? `Native DSP is live${livePreview.dropped
-        ? ` · ${livePreview.dropped} late chunk(s) dropped`
+        ? ` · ${livePreview.dropped} output buffer refill(s)`
         : ""}${livePreview.deviceLabel
         ? ` · ${livePreview.deviceLabel}`
         : ""}`
@@ -806,6 +854,7 @@ async function startNativeLiveSession() {
   const payload = await postJson("/api/live/start", sessionRequest({
     sample_rate: sampleRate,
     overrides: currentOverrides(),
+    input_mode: livePreview.inputMode,
   }));
   livePreview.token = payload.token;
   livePreview.generation += 1;
@@ -832,7 +881,8 @@ function scheduleLiveAudio(interleaved) {
   const node = context.createBufferSource();
   node.buffer = buffer;
   node.connect(context.destination);
-  const earliest = context.currentTime + 0.035;
+  const lead = livePreview.inputMode === "pedal-alsa" ? 0.08 : 0.035;
+  const earliest = context.currentTime + lead;
   if (livePreview.nextStart < context.currentTime - 0.05) {
     livePreview.nextStart = earliest;
   }
@@ -861,14 +911,50 @@ async function pumpLivePreview() {
       throw new Error(result.meta.error || "live DSP stopped");
     }
     if (livePreview.active && item.generation === livePreview.generation) {
+      scheduleLiveAudio(state.monitor === "dry" ? item.audio : result.audio);
+    }
+  } catch (error) {
+    setStatus(`live input stopped: ${error.message}`, "error");
+    await stopLivePreview(true);
+    updateLivePreviewState(`Stopped: ${error.message}`);
+  } finally {
+    livePreview.processing = false;
+    if (livePreview.active) pumpLivePreview();
+  }
+}
+
+async function pumpPedalPreview() {
+  if (!livePreview.active || livePreview.inputMode !== "pedal-alsa" ||
+      livePreview.restarting || livePreview.processing) return;
+  livePreview.processing = true;
+  const generation = livePreview.generation;
+  try {
+    const result = await postFrame(
+      "/api/live/pedal-chunk",
+      {
+        token: livePreview.token,
+        frames: 1024,
+        channels: state.channels,
+        gain_db: state.inputLevelDb + PEDAL_CAPTURE_GAIN_DB,
+        monitor: state.monitor,
+      },
+      null,
+    );
+    if (result.meta.status !== "ok") {
+      throw new Error(result.meta.error || "direct pedal DSP stopped");
+    }
+    if (livePreview.active && generation === livePreview.generation) {
       scheduleLiveAudio(result.audio);
     }
   } catch (error) {
     setStatus(`live input stopped: ${error.message}`, "error");
     await stopLivePreview(true);
+    updateLivePreviewState(`Stopped: ${error.message}`);
   } finally {
     livePreview.processing = false;
-    if (livePreview.active) pumpLivePreview();
+    if (livePreview.active && livePreview.inputMode === "pedal-alsa") {
+      pumpPedalPreview();
+    }
   }
 }
 
@@ -890,15 +976,37 @@ function enqueueLiveInput(mono) {
 async function startLivePreview() {
   if (livePreview.active || livePreview.starting) return;
   livePreview.starting = true;
-  updateLivePreviewState("Requesting the raw instrument input…");
+  const directPedal = state.audioInputDeviceId === "pedal-alsa";
+  livePreview.inputMode = directPedal ? "pedal-alsa" : "browser";
+  updateLivePreviewState(directPedal
+    ? "Opening the pedal directly; no browser microphone permission is needed…"
+    : "Requesting the raw instrument input…");
   try {
-    livePreview.stream = await acquireAudioInput();
-    livePreview.deviceLabel =
-      livePreview.stream.getAudioTracks()[0]?.label ||
-      selectedAudioInputLabel();
+    if (directPedal) {
+      livePreview.deviceLabel = state.pedalAudio?.name ||
+        PEDAL_AUDIO_PRODUCT_NAME;
+    } else {
+      livePreview.stream = await acquireAudioInput();
+      livePreview.deviceLabel =
+        livePreview.stream.getAudioTracks()[0]?.label ||
+        selectedAudioInputLabel();
+    }
     livePreview.context = new AudioContext({ sampleRate: state.sampleRate });
     await livePreview.context.resume();
     await startNativeLiveSession();
+    livePreview.active = true;
+    livePreview.nextStart = livePreview.context.currentTime +
+      (directPedal ? 0.1 : 0.05);
+    livePreview.dropped = 0;
+    dom.ab.disabled = false;
+    if (directPedal) {
+      setStatus("pedal USB is running through the native firmware DSP", "ok");
+      updateLivePreviewState(
+        "Direct pedal capture is live; browser microphone access is bypassed.",
+      );
+      pumpPedalPreview();
+      return;
+    }
     livePreview.source = livePreview.context.createMediaStreamSource(
       livePreview.stream,
     );
@@ -918,9 +1026,6 @@ async function startLivePreview() {
     livePreview.source.connect(livePreview.processor);
     livePreview.processor.connect(livePreview.silent);
     livePreview.silent.connect(livePreview.context.destination);
-    livePreview.active = true;
-    livePreview.nextStart = livePreview.context.currentTime + 0.05;
-    livePreview.dropped = 0;
     setStatus("live guitar is running through the native firmware DSP", "ok");
     updateLivePreviewState("Move a control; the native session reloads it after 450 ms.");
   } catch (error) {
@@ -946,7 +1051,8 @@ async function restartLivePreview() {
   } finally {
     livePreview.restarting = false;
     updateLivePreviewState();
-    pumpLivePreview();
+    if (livePreview.inputMode === "pedal-alsa") pumpPedalPreview();
+    else pumpLivePreview();
   }
 }
 
@@ -986,8 +1092,10 @@ async function stopLivePreview(notifyServer = true) {
   livePreview.processor = null;
   livePreview.silent = null;
   livePreview.deviceLabel = "";
+  livePreview.inputMode = "browser";
   livePreview.processing = false;
   livePreview.restarting = false;
+  dom.ab.disabled = state.output === null;
   updateLivePreviewState();
 }
 
@@ -2063,9 +2171,7 @@ async function importEngineBank(file) {
   dom.hardwareApp.checked = state.includeHardwareApp;
   dom.signal.value = state.signal;
   dom.levelMatch.checked = state.levelMatch;
-  query("input-level").value = String(state.inputLevelDb);
-  query("input-level-value").textContent =
-    `${state.inputLevelDb >= 0 ? "" : "−"}${Math.abs(state.inputLevelDb)} dB`;
+  updateInputLevelControl();
   query("program-name").value = state.program.name;
   query("program-id").value = formatHex(state.program.programId);
   renderEngineBank();
@@ -2719,17 +2825,39 @@ async function changeSignal() {
     return;
   }
   if (state.signal === "mic") {
-    setStatus("recording 6 s from the raw instrument input…", "busy");
-    try {
-      state.userAudio = await captureMicrophone();
-      setStatus(`captured ${selectedAudioInputLabel()}`, "ok");
-    } catch (error) {
-      setStatus(`audio input unavailable: ${error.message}`, "error");
+    if (state.userAudio === null) {
+      setStatus("press Record input to capture a take", "ok");
       return;
     }
   }
   await prepareInput();
   scheduleRender();
+}
+
+async function recordInput() {
+  const seconds = Number(dom.recordSeconds.value);
+  if (![6, 15, 30, 60].includes(seconds)) return;
+  if (livePreview.active) await stopLivePreview();
+  dom.recordInput.disabled = true;
+  dom.recordInput.textContent = "Recording…";
+  setStatus(`recording ${seconds} s from the raw instrument input…`, "busy");
+  try {
+    state.userAudio = await captureMicrophone(seconds);
+    state.signal = "mic";
+    dom.signal.value = "mic";
+    persistWorkspace();
+    await prepareInput();
+    scheduleRender();
+    setStatus(
+      `captured ${seconds} s from ${selectedAudioInputLabel()}`,
+      "ok",
+    );
+  } catch (error) {
+    setStatus(`audio input unavailable: ${error.message}`, "error");
+  } finally {
+    dom.recordInput.disabled = false;
+    dom.recordInput.textContent = "Record input";
+  }
 }
 
 function bind() {
@@ -2751,6 +2879,8 @@ function bind() {
   dom.ab = query("ab");
   dom.liveInput = query("live-input");
   dom.liveInputState = query("live-input-state");
+  dom.recordInput = query("record-input");
+  dom.recordSeconds = query("record-seconds");
   dom.signal = query("signal");
   dom.audioInputDevice = query("audio-input-device");
   dom.fileInput = query("file-input");
@@ -2925,8 +3055,15 @@ function bind() {
     } else {
       startLivePreview().catch((error) => {
         setStatus(`live input unavailable: ${error.message}`, "error");
+        updateLivePreviewState(`Could not start: ${error.message}`);
       });
     }
+  });
+
+  dom.recordInput.addEventListener("click", () => {
+    recordInput().catch((error) => {
+      setStatus(`could not record input: ${error.message}`, "error");
+    });
   });
 
   dom.ab.addEventListener("click", () => {
@@ -2978,9 +3115,7 @@ function bind() {
 
   query("input-level").addEventListener("input", (event) => {
     state.inputLevelDb = Number(event.target.value);
-    query("input-level-value").textContent =
-      `${state.inputLevelDb >= 0 ? "" : "−"}` +
-      `${Math.abs(state.inputLevelDb)} dB`;
+    updateInputLevelControl();
     persistWorkspace();
     prepareInput().then(scheduleRender);
   });
@@ -3074,9 +3209,7 @@ async function start() {
   bind();
   dom.signal.value = state.signal;
   dom.levelMatch.checked = state.levelMatch;
-  query("input-level").value = String(state.inputLevelDb);
-  query("input-level-value").textContent =
-    `${state.inputLevelDb >= 0 ? "" : "−"}${Math.abs(state.inputLevelDb)} dB`;
+  updateInputLevelControl();
   query("program-name").value = state.program.name;
   renderEngineBank();
   OPTIONAL_ENGINE_PACKS.forEach((pack) => {
@@ -3105,6 +3238,8 @@ async function start() {
     setStatus("cannot reach the editor server", "error");
     return;
   }
+  state.pedalAudio = state.session.pedal_audio;
+  await refreshAudioInputDevices(state.audioInputDeviceId).catch(() => {});
   renderVisualDesigner();
   fillSelect(dom.sampleRate, state.session.sample_rates, state.sampleRate);
   fillSelect(dom.blockFrames, state.session.block_frames, state.blockFrames);

@@ -214,6 +214,16 @@
             <button type="button" id="live-input" class="ghost small">
               Play live input
             </button>
+            <select id="record-seconds" aria-label="Recording duration"
+                    title="Recording duration">
+              <option value="6">6 s</option>
+              <option value="15" selected>15 s</option>
+              <option value="30">30 s</option>
+              <option value="60">60 s</option>
+            </select>
+            <button type="button" id="record-input" class="ghost small">
+              Record input
+            </button>
             <button type="button" id="play" class="primary small">
               Play
             </button>
@@ -235,7 +245,7 @@
               <option value="noise">Noise burst</option>
               <option value="impulse">Impulse</option>
               <option value="file">Your guitar recording…</option>
-              <option value="mic">Record 6 s from guitar / audio input…</option>
+              <option value="mic">Recorded guitar / audio input</option>
             </select>
           </label>
           <label class="audio-input-picker">
@@ -276,11 +286,12 @@
           <b>Stateful native live playing:</b>
           <span>
             With the USB Audio hardware app installed, connect guitar → pedal
-            input and pedal USB-C → computer, then select “NCR-2 Open Pedal
-            Audio” above. Each chunk runs through one persistent instance of
-            the real firmware C, so pitch history, envelopes, delays, and
-            control changes are preserved. Use headphones or a muted monitor
-            path to avoid feedback. Open Recover remains updater-only.
+            input and pedal USB-C → computer. The recommended “Pedal USB —
+            direct” input uses the local server and needs no browser microphone
+            permission. Each chunk runs through one persistent instance of the
+            real firmware C, so pitch history, envelopes, delays, and control
+            changes are preserved. Use headphones or a muted monitor path to
+            avoid feedback. Open Recover remains updater-only.
           </span>
           <em id="live-input-state">
             Use headphones or a muted monitor path to prevent feedback.
