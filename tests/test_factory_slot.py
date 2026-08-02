@@ -361,16 +361,18 @@ class FactorySlotSourceTests(unittest.TestCase):
         for effect in (
             "NCR2_EFFECT_SHINE_DRIVE",
             "NCR2_EFFECT_WALL_FUZZ",
-            "NCR2_EFFECT_BREATHE_VIBE",
+            "NCR2_EFFECT_BOWED_ENSEMBLE",
             "NCR2_EFFECT_ECHOES_TAPE",
             "NCR2_EFFECT_RAGE_DRIVE",
             "NCR2_EFFECT_COCKED_WAH",
-            "NCR2_EFFECT_GUERRILLA_TREM",
-            "NCR2_EFFECT_WHAMMY_FUZZ",
+            "NCR2_EFFECT_TONEWHEEL_ORGAN",
+            "NCR2_EFFECT_BELL_MARIMBA",
         ):
             self.assertIn(effect, application)
         self.assertIn("NCR2_EFFECT_COUNT UINT32_C(8)", application)
-        self.assertIn("NCR2_OPEN_EFFECT_COUNT UINT32_C(32)", application)
+        self.assertIn("NCR2_OPEN_EFFECT_COUNT UINT32_C(40)", application)
+        self.assertIn("ncr2_instrument_effect_registry", application)
+        self.assertIn("process_instrument_effect(", application)
         self.assertIn(
             "if (enabled != UINT32_C(0) ||\n"
             "            g_effect_ramp != UINT32_C(0))",

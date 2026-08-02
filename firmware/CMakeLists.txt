@@ -432,6 +432,8 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
         hardware_app/src/main.c
         hardware_app/src/codec_probe.c
         hardware_app/src/footswitch_gesture.c
+        app/src/effect_runtime.c
+        app/src/effects_instrument.c
         bootloader/src/boot_trial.c
         factory_bridge/src/board_compat.c
         factory_bridge/src/factory_engine_copy.S
@@ -447,6 +449,7 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
         ncr2_hardware_audio_app
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/hardware_app/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/app/include
             ${CMAKE_CURRENT_SOURCE_DIR}/factory_bridge/include
             ${CMAKE_CURRENT_SOURCE_DIR}/factory_slot/include
             ${CMAKE_CURRENT_SOURCE_DIR}/bootloader/include
@@ -477,6 +480,7 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
             # confirmed on hardware by the v0.4.8 sweep. They route
             # nothing, so the active-low effect hypothesis is retired.
             NCR2_FACTORY_BOARD_EFFECT_ACTIVE_LOW=0
+            NCR2_HARDWARE_APP_INSTRUMENT_SLOT=1
     )
     set_source_files_properties(
         ${NCR2_HARDWARE_APP_SYSTEM_SOURCE}

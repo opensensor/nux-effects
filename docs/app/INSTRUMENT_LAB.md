@@ -1,6 +1,7 @@
 # Instrument Lab engine pack
 
-Status: host-preview prototype. It is not part of the v0.24 hardware image.
+Status: host-preview engine and v0.25 hardware trial. It is not part of the
+stable v0.24 hardware image.
 
 Instrument Lab adds a fifth, optional eight-program engine without removing
 the existing Open Amp Studio, Drive + Dynamics, Motion + Pitch, or Echo +
@@ -19,6 +20,12 @@ The eight initial voices are:
 6. Synth Brass
 7. Synth Bass
 8. Bell / Marimba
+
+The v0.25 trial assigns this entire list to open engine slot 7. Amp Studio
+remains in slot 5, Drive + Dynamics remains in slot 6, and Echo + Space remains
+in slot 8. Hold the footswitch with Type at position 7 to load Instrument Lab;
+after the reboot, the eight normal Type detents select the voices above. Amount
+controls articulation, Tweak controls character, and Level controls output.
 
 ## Signal model
 
