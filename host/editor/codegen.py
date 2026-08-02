@@ -38,14 +38,14 @@ IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 BUILTIN_DESCRIPTORS = (
     "ncr2_effect_basic_gain",
     "ncr2_effect_basic_soft_clip",
-    "ncr2_effect_bowed_ensemble",
-    "ncr2_effect_cello_voice",
-    "ncr2_effect_violin_voice",
-    "ncr2_effect_tonewheel_organ",
-    "ncr2_effect_clarinet_voice",
-    "ncr2_effect_synth_brass",
-    "ncr2_effect_synth_bass",
-    "ncr2_effect_bell_marimba",
+    "ncr2_effect_steel_acoustic",
+    "ncr2_effect_nylon_classical",
+    "ncr2_effect_twelve_string",
+    "ncr2_effect_banjo",
+    "ncr2_effect_sitar",
+    "ncr2_effect_upright_bass",
+    "ncr2_effect_bowed_cello",
+    "ncr2_effect_clarinet",
 )
 
 # `effects_basic.h` predates any naming convention an editor could infer
@@ -70,14 +70,14 @@ BUILTIN_EFFECT_MACROS: dict[tuple[int, int], dict[str, Any]] = {
 }
 
 for _effect_id, _id_macro in (
-    (0x100, "EFFECT_OPEN_BOWED_ENSEMBLE_ID"),
-    (0x101, "EFFECT_OPEN_CELLO_VOICE_ID"),
-    (0x102, "EFFECT_OPEN_VIOLIN_VOICE_ID"),
-    (0x103, "EFFECT_OPEN_TONEWHEEL_ORGAN_ID"),
-    (0x104, "EFFECT_OPEN_CLARINET_VOICE_ID"),
-    (0x105, "EFFECT_OPEN_SYNTH_BRASS_ID"),
-    (0x106, "EFFECT_OPEN_SYNTH_BASS_ID"),
-    (0x107, "EFFECT_OPEN_BELL_MARIMBA_ID"),
+    (0x100, "EFFECT_OPEN_STEEL_ACOUSTIC_ID"),
+    (0x101, "EFFECT_OPEN_NYLON_CLASSICAL_ID"),
+    (0x102, "EFFECT_OPEN_TWELVE_STRING_ID"),
+    (0x103, "EFFECT_OPEN_BANJO_ID"),
+    (0x104, "EFFECT_OPEN_SITAR_ID"),
+    (0x105, "EFFECT_OPEN_UPRIGHT_BASS_ID"),
+    (0x106, "EFFECT_OPEN_BOWED_CELLO_ID"),
+    (0x107, "EFFECT_OPEN_CLARINET_ID"),
 ):
     BUILTIN_EFFECT_MACROS[(VENDOR_OPEN, _effect_id)] = {
         "header": "effects_instrument.h",

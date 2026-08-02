@@ -47,7 +47,10 @@ but understanding or editing it is not required.
 
 The **Additional engine packs** shelf is separate from the four-slot default
 bank. Its first pack, [Instrument Lab](INSTRUMENT_LAB.md), supplies eight
-pitch-tracked audio-resynthesis voices. Loading it into an editor slot is a
+pitch-tracked spectral transformations: six plucked/string-family targets,
+Bowed Cello, and Clarinet. Twelve phase-aligned harmonic analyzers remove the
+approximate guitar spectrum, target profiles reconstruct a new excitation, and
+modal resonators impose the target body. Loading it into an editor slot is a
 reversible bank assignment and does not remove the original catalog. Device
 installation awaits the normal-application engine-assignment control plane;
 the page labels the action as preview-only.
@@ -79,6 +82,9 @@ The explicit **Record input** transport captures 6, 15, 30, or 60 seconds and
 then selects that take as the test signal automatically. Recorded audition
 bypasses the live scheduler, making a longer loop a practical fallback and a
 clean way to distinguish input/DSP quality from live transport behavior.
+The four-note harmonic probe provides a deterministic source for comparing
+target spectra, and the metrics table reports best-fit dry correlation plus the
+non-dry residual energy of every render.
 
 Level-matched auditioning applies a bounded, peak-safe gain only in the Web
 Audio playback mixer. It is off by default, and loading Instrument Lab turns

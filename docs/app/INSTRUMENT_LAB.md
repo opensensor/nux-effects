@@ -12,14 +12,14 @@ loaded into other slots.
 
 The eight initial voices are:
 
-1. Bowed Ensemble
-2. Cello
-3. Violin
-4. Tonewheel Organ
-5. Clarinet
-6. Synth Brass
-7. Synth Bass
-8. Bell / Marimba
+1. Steel Acoustic
+2. Nylon Classical
+3. Twelve String
+4. Banjo
+5. Sitar
+6. Upright Bass
+7. Bowed Cello
+8. Clarinet
 
 ### Rejected v0.25 hardware trial
 
@@ -34,7 +34,7 @@ Instrument Lab image must not be approved without captured-pedal input tests,
 on-target deadline measurements, and explicit mappings for every editor
 control.
 
-## Rebuilt signal model
+## Spectral-transformation signal model
 
 This is expressive resynthesis, not a cosmetic EQ preset. A bounded 4:1
 decimator, or 8:1 above 64 kHz, feeds a 512-sample tracker. The tracker uses a
@@ -44,15 +44,32 @@ continuity, and confirmation of large jumps before changing the stable pitch.
 The detected continuous frequency still carries bends and vibrato rather than
 forcing every sample onto an equal-tempered note grid.
 
-The resynthesizer no longer treats every instrument as a differently filtered
-saw or square oscillator. Bowed Ensemble, Cello, Violin, and Clarinet use a
-shared bounded waveguide with voice-specific excitation and damping. The
-waveguide is driven primarily by shaped noise and the player's envelope; only
-a small pickup-waveform component remains for articulation. Organ, Brass,
-Bass, and Bell / Marimba use voice-specific additive partial models and
-percussive envelopes. The organ has a drawbar-like sub/fifth spectrum rather
-than reusing the brass harmonic series. Each voice has its own attack, release,
-excitation, partial balance, output trim, and speaker-friendly filter.
+The earlier implementations still treated the input as guitar plus an effect,
+or replaced it with a small oscillator bank that merely followed guitar pitch.
+Neither is an instrument transformation. The current runtime instead performs
+pitch-synchronous analysis and reconstruction.
+
+Twelve quadrature demodulators follow the detected fundamental and estimate a
+complex amplitude for every harmonic. For input harmonic `k`, the wet-path
+amplitude is approximately:
+
+```text
+A_out[k] = A_in[k] * clamp(target[k] / guitar[k])
+```
+
+`guitar[k]` is a bounded pickup/body reference and `target[k]` is the selected
+instrument's harmonic envelope. A separate phase-continuous target oscillator
+bank fills harmonics that the pickup did not contain and permits octave-down
+Upright Bass and Bowed Cello. The reconstructed excitation then passes through
+three target-specific modal body resonators. Pick noise, banjo attack, sitar
+buzz, cello bow noise, clarinet breath, target attack/release, and output trim
+are applied as parts of reconstruction. The dry waveform is never added to the
+wet signal; the Mix/Transformation controls perform the only dry blend.
+
+This is still a mathematical prototype, not sample playback and not a claim of
+acoustic-instrument realism. Its purpose is to establish the correct
+analysis/reconstruction architecture and make failures attributable to pitch
+tracking, spectral targets, articulation, or playback hardware independently.
 
 The panel-facing controls are:
 
@@ -62,7 +79,7 @@ The panel-facing controls are:
 - **Instrument Mix**: the explicit dry/resynthesized balance; and
 - **Tracking Sensitivity**: the input gate relative to the learned noise floor.
 
-The implementation is allocation-free, uses approximately 6.2 KiB of effect
+The implementation is allocation-free, uses approximately 2.4 KiB of effect
 context, contains no mutable file-scope DSP state, and needs no `libm` call in
 the audio path. The editor executes this firmware C directly in offline and
 live-input preview. Cortex-M7 cycle measurement remains required before device
@@ -71,20 +88,22 @@ approval.
 ## Acceptance evidence
 
 The first trustworthy pedal recording exposed another failed assumption: the
-previous defaults changed samples but retained enough dry guitar to make the
-whole pack perceptually ineffective. Instrument Mix and Transformation now
-default to fully wet, sensitivity is matched to recorded pedal input, and saved
-slots using the exact old defaults are migrated automatically. The pickup no
-longer dominates the string waveguide excitation.
+previous defaults changed samples but retained enough guitar structure to make
+the whole pack perceptually ineffective. Instrument Mix and Transformation
+remain fully wet by default, sensitivity is matched to recorded pedal input,
+and an untouched saved copy of the old pack is migrated to the new target
+names. The editor also reports best-fit dry correlation and the percentage of
+output energy that remains after that dry component is subtracted.
 
 The bundled raw DI fixture is not normalized and level matching is off for
-Instrument Lab. Across all eight voices the current default RMS level is about
--1 dB to +1.2 dB relative to dry, with peaks below 0.35. Automated tests require
-all eight renders to be finite and level-safe. They also subtract the best-fit
-dry signal and require the resynthesized component to dominate every default,
-limit pairwise voice correlation so different labels cannot hide the same
-oscillator, and require both Transformation and Character to make material
-audible changes.
+Instrument Lab. Across all eight transformations the current default RMS level
+is approximately -0.3 dB to +1.5 dB relative to dry, with peaks below 0.3 on
+the fixture. Automated tests require all renders to be finite and level-safe,
+subtract the best-fit dry signal, limit pairwise correlation, and require both
+Transformation and Character to make material audible changes. A controlled
+220 Hz probe additionally requires Upright Bass to move the dominant output to
+110 Hz and requires Clarinet's odd-harmonic energy to exceed its even-harmonic
+energy by at least 100:1 while Banjo retains a broad harmonic family.
 
 Those host gates do not constitute hardware approval. Before another slot is
 flashed, the rebuilt version still needs:

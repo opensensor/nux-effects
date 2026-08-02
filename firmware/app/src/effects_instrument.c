@@ -11,28 +11,130 @@
 #define INSTRUMENT_MAX_LAG UINT32_C(184)
 #define INSTRUMENT_ANALYSIS_INTERVAL UINT32_C(24)
 #define INSTRUMENT_DECIMATION UINT32_C(4)
-#define INSTRUMENT_WAVEGUIDE_SAMPLES UINT32_C(1024)
-#define INSTRUMENT_WAVEGUIDE_MASK \
-    (INSTRUMENT_WAVEGUIDE_SAMPLES - UINT32_C(1))
+#define INSTRUMENT_PARTIAL_COUNT UINT32_C(12)
+#define INSTRUMENT_BODY_MODE_COUNT UINT32_C(3)
 #define INSTRUMENT_MIDI_FIRST UINT32_C(36)
 #define INSTRUMENT_MIDI_LAST UINT32_C(96)
 
 enum instrument_voice {
-    INSTRUMENT_BOWED_ENSEMBLE = 0,
-    INSTRUMENT_CELLO = 1,
-    INSTRUMENT_VIOLIN = 2,
-    INSTRUMENT_TONEWHEEL_ORGAN = 3,
-    INSTRUMENT_CLARINET = 4,
-    INSTRUMENT_SYNTH_BRASS = 5,
-    INSTRUMENT_SYNTH_BASS = 6,
-    INSTRUMENT_BELL_MARIMBA = 7,
+    INSTRUMENT_STEEL_ACOUSTIC = 0,
+    INSTRUMENT_NYLON_CLASSICAL = 1,
+    INSTRUMENT_TWELVE_STRING = 2,
+    INSTRUMENT_BANJO = 3,
+    INSTRUMENT_SITAR = 4,
+    INSTRUMENT_UPRIGHT_BASS = 5,
+    INSTRUMENT_BOWED_CELLO = 6,
+    INSTRUMENT_CLARINET = 7,
+};
+
+typedef struct instrument_target {
+    float partials[INSTRUMENT_PARTIAL_COUNT];
+    float pitch_ratio;
+    float spectral_mix;
+    float body_mix;
+    float transient_level;
+    float output_gain;
+    float body_frequency[INSTRUMENT_BODY_MODE_COUNT];
+    float body_radius[INSTRUMENT_BODY_MODE_COUNT];
+    float body_gain[INSTRUMENT_BODY_MODE_COUNT];
+    float attack_ms;
+    float release_ms;
+} instrument_target_t;
+
+/* The target spectra are normalized harmonic envelopes, not EQ curves.  The
+ * input is first decomposed into phase-aligned partials; these profiles then
+ * define the newly reconstructed source before target body resonances. */
+static const instrument_target_t instrument_targets[] = {
+    {
+        { 1.00F, 0.72F, 0.53F, 0.41F, 0.32F, 0.25F,
+          0.20F, 0.16F, 0.13F, 0.10F, 0.08F, 0.065F },
+        1.0F, 0.48F, 0.34F, 0.16F, 1.00F,
+        { 108.0F, 205.0F, 342.0F },
+        { 0.9982F, 0.9974F, 0.9968F },
+        { 0.46F, 0.32F, 0.22F },
+        2.5F, 180.0F,
+    },
+    {
+        { 1.00F, 0.48F, 0.25F, 0.14F, 0.085F, 0.055F,
+          0.038F, 0.028F, 0.021F, 0.016F, 0.012F, 0.009F },
+        1.0F, 0.36F, 0.42F, 0.07F, 1.05F,
+        { 96.0F, 188.0F, 315.0F },
+        { 0.9985F, 0.9978F, 0.9970F },
+        { 0.52F, 0.30F, 0.18F },
+        4.5F, 220.0F,
+    },
+    {
+        { 1.00F, 0.82F, 0.62F, 0.48F, 0.38F, 0.31F,
+          0.25F, 0.20F, 0.17F, 0.14F, 0.115F, 0.095F },
+        1.006F, 0.28F, 0.30F, 0.13F, 0.88F,
+        { 122.0F, 247.0F, 515.0F },
+        { 0.9980F, 0.9971F, 0.9964F },
+        { 0.40F, 0.34F, 0.26F },
+        2.0F, 200.0F,
+    },
+    {
+        { 0.72F, 1.00F, 0.84F, 0.68F, 0.56F, 0.47F,
+          0.40F, 0.34F, 0.29F, 0.25F, 0.21F, 0.18F },
+        1.0F, 0.38F, 0.36F, 0.38F, 1.05F,
+        { 255.0F, 515.0F, 930.0F },
+        { 0.9968F, 0.9958F, 0.9948F },
+        { 0.38F, 0.34F, 0.28F },
+        1.5F, 95.0F,
+    },
+    {
+        { 1.00F, 0.67F, 0.57F, 0.48F, 0.41F, 0.35F,
+          0.30F, 0.26F, 0.23F, 0.20F, 0.175F, 0.15F },
+        1.002F, 0.30F, 0.46F, 0.31F, 0.95F,
+        { 178.0F, 635.0F, 1280.0F },
+        { 0.9984F, 0.9964F, 0.9945F },
+        { 0.42F, 0.34F, 0.24F },
+        2.0F, 260.0F,
+    },
+    {
+        { 1.00F, 0.52F, 0.28F, 0.16F, 0.095F, 0.060F,
+          0.040F, 0.028F, 0.020F, 0.015F, 0.011F, 0.008F },
+        0.5F, 0.04F, 0.56F, 0.11F, 0.72F,
+        { 72.0F, 142.0F, 268.0F },
+        { 0.9990F, 0.9983F, 0.9974F },
+        { 0.50F, 0.31F, 0.19F },
+        5.0F, 320.0F,
+    },
+    {
+        { 1.00F, 0.66F, 0.48F, 0.37F, 0.29F, 0.23F,
+          0.19F, 0.16F, 0.135F, 0.115F, 0.098F, 0.084F },
+        0.5F, 0.02F, 0.52F, 0.24F, 0.84F,
+        { 88.0F, 177.0F, 305.0F },
+        { 0.9992F, 0.9986F, 0.9978F },
+        { 0.46F, 0.34F, 0.20F },
+        58.0F, 460.0F,
+    },
+    {
+        { 1.00F, 0.035F, 0.53F, 0.025F, 0.31F, 0.018F,
+          0.20F, 0.014F, 0.14F, 0.011F, 0.10F, 0.009F },
+        1.0F, 0.10F, 0.50F, 0.045F, 0.85F,
+        { 310.0F, 910.0F, 1510.0F },
+        { 0.9980F, 0.9960F, 0.9938F },
+        { 0.42F, 0.36F, 0.22F },
+        13.0F, 210.0F,
+    },
+};
+
+static const float instrument_guitar_profile[INSTRUMENT_PARTIAL_COUNT] = {
+    1.00F, 0.76F, 0.58F, 0.45F, 0.36F, 0.29F,
+    0.24F, 0.20F, 0.17F, 0.145F, 0.125F, 0.108F,
 };
 
 typedef struct instrument_voice_state {
-    float phase[6];
+    float analysis_phase[INSTRUMENT_PARTIAL_COUNT];
+    float synthesis_phase[INSTRUMENT_PARTIAL_COUNT];
+    float analysis_i[INSTRUMENT_PARTIAL_COUNT];
+    float analysis_q[INSTRUMENT_PARTIAL_COUNT];
+    float body_previous[INSTRUMENT_BODY_MODE_COUNT];
+    float body_older[INSTRUMENT_BODY_MODE_COUNT];
+    float body_coefficient[INSTRUMENT_BODY_MODE_COUNT];
+    float body_radius_squared[INSTRUMENT_BODY_MODE_COUNT];
     float tone;
-    float body;
-    float wave_tone;
+    float dc;
     float percussive_envelope;
 } instrument_voice_state_t;
 
@@ -53,7 +155,6 @@ typedef struct instrument_context {
     float decimation_filter_a;
     float decimation_filter_b;
     float tracker[INSTRUMENT_TRACKER_SAMPLES];
-    float waveguide[INSTRUMENT_WAVEGUIDE_SAMPLES];
     uint32_t tracker_write;
     uint32_t tracker_count;
     uint32_t decimation_count;
@@ -64,7 +165,6 @@ typedef struct instrument_context {
     uint32_t onset_count;
     uint32_t handled_onset;
     uint32_t onset_refractory;
-    uint32_t waveguide_write;
     uint32_t random_state;
     effect_instrument_note_state_t note;
     instrument_voice_state_t voice_state;
@@ -331,190 +431,126 @@ static void instrument_track_sample(
     }
 }
 
-static float instrument_waveguide(
+static float instrument_target_body(
     instrument_context_t *context,
-    float normalized_input,
-    float noise,
-    float feedback,
-    float damping)
+    const instrument_target_t *target,
+    float excitation)
 {
-    float delay = (float)context->sample_rate /
-        instrument_clamp(context->tracked_frequency, 65.0F, 1450.0F);
-    uint32_t whole;
-    float fraction;
-    uint32_t recent;
-    uint32_t older;
-    float delayed;
-    float excitation;
+    instrument_voice_state_t *state = &context->voice_state;
+    float body = 0.0F;
 
-    delay = instrument_clamp(
-        delay, 16.0F, (float)(INSTRUMENT_WAVEGUIDE_SAMPLES - UINT32_C(2)));
-    whole = (uint32_t)delay;
-    fraction = delay - (float)whole;
-    recent = (context->waveguide_write + INSTRUMENT_WAVEGUIDE_SAMPLES -
-        whole) & INSTRUMENT_WAVEGUIDE_MASK;
-    older = (recent + INSTRUMENT_WAVEGUIDE_SAMPLES - UINT32_C(1)) &
-        INSTRUMENT_WAVEGUIDE_MASK;
-    delayed = context->waveguide[recent] * (1.0F - fraction) +
-        context->waveguide[older] * fraction;
-    context->voice_state.wave_tone += damping *
-        (delayed - context->voice_state.wave_tone);
-    /* Excite the model from the player's envelope and articulation, but do
-     * not feed enough of the pickup waveform through the delay line for the
-     * result to collapse into a resonant guitar effect.  The earlier balance
-     * measured as strongly dry-correlated on real DI even at 100% mix. */
-    excitation = normalized_input * 0.018F +
-        noise * (0.042F + context->character * 0.026F);
-    context->waveguide[context->waveguide_write] = instrument_soft_bound(
-        excitation + context->voice_state.wave_tone * feedback);
-    context->waveguide_write =
-        (context->waveguide_write + UINT32_C(1)) &
-        INSTRUMENT_WAVEGUIDE_MASK;
-    return context->voice_state.wave_tone;
-}
+    for (uint32_t mode = UINT32_C(0);
+         mode < INSTRUMENT_BODY_MODE_COUNT;
+         ++mode) {
+        const float radius = target->body_radius[mode];
+        const float next = excitation * (1.0F - radius) +
+            state->body_coefficient[mode] * state->body_previous[mode] -
+            state->body_radius_squared[mode] * state->body_older[mode];
 
-static void instrument_advance_phases(
-    instrument_context_t *context,
-    float increment,
-    const float ratios[6])
-{
-    for (uint32_t partial = UINT32_C(0);
-         partial < UINT32_C(6);
-         ++partial) {
-        context->voice_state.phase[partial] = instrument_wrap(
-            context->voice_state.phase[partial] +
-            increment * ratios[partial]);
+        state->body_older[mode] = state->body_previous[mode];
+        state->body_previous[mode] = instrument_soft_bound(next);
+        body += state->body_previous[mode] * target->body_gain[mode];
     }
+    return excitation * (1.0F - target->body_mix) +
+        body * target->body_mix * 3.2F;
 }
 
+/* Pitch-synchronous harmonic transplantation.  Quadrature demodulators
+ * estimate the complex amplitude of each guitar partial.  Reconstruction
+ * divides out an approximate pickup spectrum and applies the target spectrum,
+ * while a separately generated component can create missing harmonics or a
+ * new register.  No sample of the dry waveform is mixed directly into wet. */
 static float instrument_voice_sample(
     instrument_context_t *context,
     float input,
     float frequency)
 {
     instrument_voice_state_t *state = &context->voice_state;
-    const float increment = frequency / (float)context->sample_rate;
-    const float brightness = context->character;
+    const instrument_target_t *target = &instrument_targets[context->voice];
+    const float base_increment = frequency / (float)context->sample_rate;
     const float input_scale = context->input_envelope > 0.008F
         ? context->input_envelope
         : 0.008F;
     const float normalized_input = instrument_clamp(
         input / input_scale, -1.0F, 1.0F);
+    const float analyzer_coefficient = 0.0022F +
+        context->transformation * 0.0018F;
     const float noise = instrument_random(context);
-    float ratios[6] = { 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F };
-    float raw;
-    float tone_coefficient;
-    float output_gain;
+    float spectral = 0.0F;
+    float synthesized = 0.0F;
+    float partial_sum = 0.0F;
 
-    switch (context->voice) {
-    case INSTRUMENT_BOWED_ENSEMBLE:
-        ratios[1] = 1.006F;
-        raw = instrument_waveguide(
-            context, normalized_input, noise,
-            0.988F + brightness * 0.008F,
-            0.10F + brightness * 0.22F) * 1.55F +
-            instrument_sine(state->phase[0]) * 0.20F +
-            instrument_sine(state->phase[1]) * 0.14F;
-        tone_coefficient = 0.10F + brightness * 0.24F;
-        output_gain = 0.85F;
-        break;
-    case INSTRUMENT_CELLO:
-        ratios[1] = 0.5F;
-        ratios[2] = 2.0F;
-        raw = instrument_waveguide(
-            context, normalized_input, noise,
-            0.991F + brightness * 0.005F,
-            0.075F + brightness * 0.14F) * 1.65F +
-            instrument_sine(state->phase[1]) * 0.20F +
-            instrument_sine(state->phase[0]) * 0.15F;
-        tone_coefficient = 0.075F + brightness * 0.17F;
-        output_gain = 0.95F;
-        break;
-    case INSTRUMENT_VIOLIN:
-        ratios[1] = 2.0F;
-        ratios[2] = 3.0F;
-        raw = instrument_waveguide(
-            context, normalized_input, noise,
-            0.984F + brightness * 0.010F,
-            0.14F + brightness * 0.30F) * 1.45F +
-            instrument_sine(state->phase[1]) * (0.12F + brightness * 0.15F) +
-            instrument_sine(state->phase[2]) * brightness * 0.10F;
-        tone_coefficient = 0.14F + brightness * 0.34F;
-        output_gain = 1.00F;
-        break;
-    case INSTRUMENT_TONEWHEEL_ORGAN:
-        /* Drawbar-like sub, fundamental, fifth, octave and upper drawbars.
-         * The non-integer fifth separates this voice from the saw-like brass
-         * spectrum instead of making both presets the same oscillator mix. */
-        ratios[0] = 0.5F;
-        ratios[1] = 1.0F;
-        ratios[2] = 1.5F;
-        ratios[3] = 2.0F;
-        ratios[4] = 3.0F;
-        ratios[5] = 4.0F;
-        raw = instrument_sine(state->phase[0]) * 0.18F +
-            instrument_sine(state->phase[1]) * 0.48F +
-            instrument_sine(state->phase[2]) * (0.08F + brightness * 0.16F) +
-            instrument_sine(state->phase[3]) * 0.13F +
-            instrument_sine(state->phase[4]) * brightness * 0.12F +
-            instrument_sine(state->phase[5]) * brightness * 0.08F;
-        tone_coefficient = 0.22F + brightness * 0.38F;
-        output_gain = 0.56F;
-        break;
-    case INSTRUMENT_CLARINET:
-        ratios[1] = 3.0F;
-        ratios[2] = 5.0F;
-        ratios[3] = 7.0F;
-        raw = instrument_waveguide(
-            context, normalized_input, noise,
-            0.972F + brightness * 0.016F,
-            0.08F + brightness * 0.26F) * 0.85F +
-            instrument_sine(state->phase[0]) * 0.48F +
-            instrument_sine(state->phase[1]) * (0.10F + brightness * 0.20F) +
-            instrument_sine(state->phase[2]) * brightness * 0.10F +
-            noise * context->input_envelope * 0.16F;
-        tone_coefficient = 0.10F + brightness * 0.28F;
-        output_gain = 0.58F;
-        break;
-    case INSTRUMENT_SYNTH_BRASS:
-        raw = instrument_sine(state->phase[0]) * 0.48F +
-            instrument_sine(state->phase[1]) * (0.16F + brightness * 0.20F) +
-            instrument_sine(state->phase[2]) * (0.08F + brightness * 0.16F) +
-            instrument_sine(state->phase[3]) * brightness * 0.10F;
-        tone_coefficient = 0.08F + brightness * 0.32F +
-            context->input_envelope * 0.35F;
-        output_gain = 0.62F;
-        break;
-    case INSTRUMENT_SYNTH_BASS:
-        ratios[1] = 0.5F;
-        ratios[2] = 2.0F;
-        raw = instrument_sine(state->phase[1]) * 0.48F +
-            instrument_sine(state->phase[0]) * 0.42F +
-            instrument_sine(state->phase[2]) * brightness * 0.20F;
-        tone_coefficient = 0.07F + brightness * 0.20F;
-        output_gain = 0.50F;
-        break;
-    case INSTRUMENT_BELL_MARIMBA:
-    default:
-        ratios[1] = 2.73F;
-        ratios[2] = 4.07F;
-        ratios[3] = 5.43F;
-        raw = instrument_sine(state->phase[0]) * 0.56F +
-            instrument_sine(state->phase[1]) * (0.16F + brightness * 0.12F) +
-            instrument_sine(state->phase[2]) * (0.10F + brightness * 0.10F) +
-            instrument_sine(state->phase[3]) * brightness * 0.08F;
-        raw *= state->percussive_envelope;
-        tone_coefficient = 0.16F + brightness * 0.38F;
-        output_gain = 2.10F;
-        break;
+    for (uint32_t partial = UINT32_C(0);
+         partial < INSTRUMENT_PARTIAL_COUNT;
+         ++partial) {
+        const float harmonic = (float)(partial + UINT32_C(1));
+        const float analysis_frequency = frequency * harmonic;
+        const float synthesis_frequency =
+            frequency * target->pitch_ratio * harmonic;
+        const float sine = instrument_sine(state->analysis_phase[partial]);
+        const float cosine = -instrument_sine(instrument_wrap(
+            state->analysis_phase[partial] + 0.25F));
+        const float position = (float)partial /
+            (float)(INSTRUMENT_PARTIAL_COUNT - UINT32_C(1));
+        const float tilt = instrument_clamp(
+            1.0F + (context->character - 0.5F) *
+                1.8F * (position - 0.28F),
+            0.35F,
+            1.85F);
+        const float target_weight = target->partials[partial] * tilt;
+
+        if (analysis_frequency < (float)context->sample_rate * 0.46F) {
+            const float reconstructed = 2.0F *
+                (state->analysis_i[partial] * cosine +
+                 state->analysis_q[partial] * sine);
+            const float transfer = instrument_clamp(
+                target_weight / instrument_guitar_profile[partial],
+                0.08F,
+                4.5F);
+
+            state->analysis_i[partial] += analyzer_coefficient *
+                (normalized_input * cosine - state->analysis_i[partial]);
+            state->analysis_q[partial] += analyzer_coefficient *
+                (normalized_input * sine - state->analysis_q[partial]);
+            spectral += reconstructed * transfer;
+        } else {
+            state->analysis_i[partial] *= 0.996F;
+            state->analysis_q[partial] *= 0.996F;
+        }
+        if (synthesis_frequency < (float)context->sample_rate * 0.46F) {
+            synthesized += instrument_sine(
+                state->synthesis_phase[partial]) * target_weight;
+        }
+        partial_sum += target_weight;
+        state->analysis_phase[partial] = instrument_wrap(
+            state->analysis_phase[partial] + base_increment * harmonic);
+        state->synthesis_phase[partial] = instrument_wrap(
+            state->synthesis_phase[partial] +
+            base_increment * target->pitch_ratio * harmonic);
     }
 
-    instrument_advance_phases(context, increment, ratios);
-    tone_coefficient = instrument_clamp(
-        tone_coefficient, 0.05F, 0.62F);
-    state->tone += tone_coefficient * (raw - state->tone);
-    state->body += 0.0015F * (state->tone - state->body);
-    return (state->tone - state->body * 0.22F) * output_gain;
+    spectral *= 0.82F / (0.72F + partial_sum * 0.12F);
+    synthesized *= 1.35F / (0.90F + partial_sum * 0.34F);
+    {
+        float raw = spectral * target->spectral_mix +
+            synthesized * (1.0F - target->spectral_mix);
+
+        raw += noise * state->percussive_envelope *
+            target->transient_level;
+        if (context->voice == INSTRUMENT_SITAR) {
+            raw += instrument_soft_bound(spectral * 7.0F) *
+                state->percussive_envelope * 0.16F;
+        } else if (context->voice == INSTRUMENT_BOWED_CELLO) {
+            raw += noise * (0.06F + context->character * 0.10F);
+        } else if (context->voice == INSTRUMENT_CLARINET) {
+            raw += noise * (0.018F + context->character * 0.022F);
+        }
+        raw = instrument_target_body(context, target, raw);
+        state->tone += (0.12F + context->character * 0.34F) *
+            (raw - state->tone);
+        state->dc += 0.0012F * (state->tone - state->dc);
+        return (state->tone - state->dc * 0.18F) * target->output_gain;
+    }
 }
 
 static void instrument_update_note_state(
@@ -578,7 +614,6 @@ static void instrument_clear_state(instrument_context_t *context)
     context->onset_count = UINT32_C(0);
     context->handled_onset = UINT32_C(0);
     context->onset_refractory = UINT32_C(0);
-    context->waveguide_write = UINT32_C(0);
     context->random_state = UINT32_C(0x6d2b79f5);
     context->note.frequency_hz = 0.0F;
     context->note.confidence = 0.0F;
@@ -592,20 +627,24 @@ static void instrument_clear_state(instrument_context_t *context)
          ++sample) {
         context->tracker[sample] = 0.0F;
     }
-    for (uint32_t sample = UINT32_C(0);
-         sample < INSTRUMENT_WAVEGUIDE_SAMPLES;
-         ++sample) {
-        context->waveguide[sample] = 0.0F;
-    }
     for (uint32_t partial = UINT32_C(0);
-         partial < UINT32_C(6);
+         partial < INSTRUMENT_PARTIAL_COUNT;
          ++partial) {
-        context->voice_state.phase[partial] =
-            (float)partial * 0.137F;
+        context->voice_state.analysis_phase[partial] = instrument_wrap(
+            (float)partial * 0.117F);
+        context->voice_state.synthesis_phase[partial] = instrument_wrap(
+            (float)partial * 0.173F);
+        context->voice_state.analysis_i[partial] = 0.0F;
+        context->voice_state.analysis_q[partial] = 0.0F;
+    }
+    for (uint32_t mode = UINT32_C(0);
+         mode < INSTRUMENT_BODY_MODE_COUNT;
+         ++mode) {
+        context->voice_state.body_previous[mode] = 0.0F;
+        context->voice_state.body_older[mode] = 0.0F;
     }
     context->voice_state.tone = 0.0F;
-    context->voice_state.body = 0.0F;
-    context->voice_state.wave_tone = 0.0F;
+    context->voice_state.dc = 0.0F;
     context->voice_state.percussive_envelope = 0.0F;
 }
 
@@ -621,6 +660,9 @@ static uint16_t instrument_initialize_voice(
     if (sample_rate < UINT32_C(32000) || sample_rate > UINT32_C(96000)) {
         return EFFECT_RUNTIME_INVALID_ARGUMENT;
     }
+    if (voice >= sizeof(instrument_targets) / sizeof(instrument_targets[0])) {
+        return EFFECT_RUNTIME_INVALID_ARGUMENT;
+    }
     context->sample_rate = sample_rate;
     context->decimation_factor = sample_rate > UINT32_C(64000)
         ? UINT32_C(8)
@@ -631,6 +673,20 @@ static uint16_t instrument_initialize_voice(
     context->mix = 1.0F;
     context->sensitivity = 0.006F;
     instrument_clear_state(context);
+    for (uint32_t mode = UINT32_C(0);
+         mode < INSTRUMENT_BODY_MODE_COUNT;
+         ++mode) {
+        const instrument_target_t *target = &instrument_targets[voice];
+        const float radius = target->body_radius[mode];
+        const float phase = target->body_frequency[mode] /
+            (float)sample_rate;
+        const float cosine = -instrument_sine(instrument_wrap(
+            phase + 0.25F));
+
+        context->voice_state.body_coefficient[mode] =
+            2.0F * radius * cosine;
+        context->voice_state.body_radius_squared[mode] = radius * radius;
+    }
     return EFFECT_RUNTIME_OK;
 }
 
@@ -645,15 +701,19 @@ static uint16_t instrument_initialize_voice(
     }
 
 DEFINE_INSTRUMENT_INITIALIZER(
-    bowed_ensemble_initialize,
-    INSTRUMENT_BOWED_ENSEMBLE)
-DEFINE_INSTRUMENT_INITIALIZER(cello_initialize, INSTRUMENT_CELLO)
-DEFINE_INSTRUMENT_INITIALIZER(violin_initialize, INSTRUMENT_VIOLIN)
-DEFINE_INSTRUMENT_INITIALIZER(organ_initialize, INSTRUMENT_TONEWHEEL_ORGAN)
+    steel_acoustic_initialize,
+    INSTRUMENT_STEEL_ACOUSTIC)
+DEFINE_INSTRUMENT_INITIALIZER(
+    nylon_classical_initialize,
+    INSTRUMENT_NYLON_CLASSICAL)
+DEFINE_INSTRUMENT_INITIALIZER(
+    twelve_string_initialize,
+    INSTRUMENT_TWELVE_STRING)
+DEFINE_INSTRUMENT_INITIALIZER(banjo_initialize, INSTRUMENT_BANJO)
+DEFINE_INSTRUMENT_INITIALIZER(sitar_initialize, INSTRUMENT_SITAR)
+DEFINE_INSTRUMENT_INITIALIZER(upright_bass_initialize, INSTRUMENT_UPRIGHT_BASS)
+DEFINE_INSTRUMENT_INITIALIZER(bowed_cello_initialize, INSTRUMENT_BOWED_CELLO)
 DEFINE_INSTRUMENT_INITIALIZER(clarinet_initialize, INSTRUMENT_CLARINET)
-DEFINE_INSTRUMENT_INITIALIZER(brass_initialize, INSTRUMENT_SYNTH_BRASS)
-DEFINE_INSTRUMENT_INITIALIZER(bass_initialize, INSTRUMENT_SYNTH_BASS)
-DEFINE_INSTRUMENT_INITIALIZER(bell_initialize, INSTRUMENT_BELL_MARIMBA)
 
 static void instrument_reset(void *opaque)
 {
@@ -663,24 +723,10 @@ static void instrument_reset(void *opaque)
 static float instrument_attack_coefficient(
     const instrument_context_t *context)
 {
-    float milliseconds;
+    const float milliseconds = 1.0F +
+        instrument_targets[context->voice].attack_ms *
+        context->transformation;
 
-    switch (context->voice) {
-    case INSTRUMENT_BOWED_ENSEMBLE:
-    case INSTRUMENT_CELLO:
-    case INSTRUMENT_VIOLIN:
-        milliseconds = 12.0F + context->transformation * 95.0F;
-        break;
-    case INSTRUMENT_SYNTH_BRASS:
-        milliseconds = 7.0F + context->transformation * 42.0F;
-        break;
-    case INSTRUMENT_BELL_MARIMBA:
-        milliseconds = 2.0F;
-        break;
-    default:
-        milliseconds = 4.0F + context->transformation * 18.0F;
-        break;
-    }
     return 1000.0F / (milliseconds * (float)context->sample_rate);
 }
 
@@ -691,7 +737,8 @@ static uint16_t instrument_process(
     instrument_context_t *context = (instrument_context_t *)opaque;
     const float attack = instrument_attack_coefficient(context);
     const float release = 1000.0F /
-        ((120.0F + context->transformation * 680.0F) *
+        ((40.0F + context->transformation *
+            instrument_targets[context->voice].release_ms) *
          (float)context->sample_rate);
 
     for (uint32_t frame = UINT32_C(0);
@@ -830,55 +877,55 @@ static const effect_parameter_descriptor_t instrument_parameters[] = {
     }
 
 INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_bowed_ensemble,
-    EFFECT_OPEN_BOWED_ENSEMBLE_ID,
-    "Instrument · Bowed Ensemble",
-    bowed_ensemble_initialize);
+    ncr2_effect_steel_acoustic,
+    EFFECT_OPEN_STEEL_ACOUSTIC_ID,
+    "Transform · Steel Acoustic",
+    steel_acoustic_initialize);
 INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_cello_voice,
-    EFFECT_OPEN_CELLO_VOICE_ID,
-    "Instrument · Cello",
-    cello_initialize);
+    ncr2_effect_nylon_classical,
+    EFFECT_OPEN_NYLON_CLASSICAL_ID,
+    "Transform · Nylon Classical",
+    nylon_classical_initialize);
 INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_violin_voice,
-    EFFECT_OPEN_VIOLIN_VOICE_ID,
-    "Instrument · Violin",
-    violin_initialize);
+    ncr2_effect_twelve_string,
+    EFFECT_OPEN_TWELVE_STRING_ID,
+    "Transform · Twelve String",
+    twelve_string_initialize);
 INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_tonewheel_organ,
-    EFFECT_OPEN_TONEWHEEL_ORGAN_ID,
-    "Instrument · Tonewheel Organ",
-    organ_initialize);
+    ncr2_effect_banjo,
+    EFFECT_OPEN_BANJO_ID,
+    "Transform · Banjo",
+    banjo_initialize);
 INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_clarinet_voice,
-    EFFECT_OPEN_CLARINET_VOICE_ID,
-    "Instrument · Clarinet",
+    ncr2_effect_sitar,
+    EFFECT_OPEN_SITAR_ID,
+    "Transform · Sitar",
+    sitar_initialize);
+INSTRUMENT_DESCRIPTOR(
+    ncr2_effect_upright_bass,
+    EFFECT_OPEN_UPRIGHT_BASS_ID,
+    "Transform · Upright Bass",
+    upright_bass_initialize);
+INSTRUMENT_DESCRIPTOR(
+    ncr2_effect_bowed_cello,
+    EFFECT_OPEN_BOWED_CELLO_ID,
+    "Transform · Bowed Cello",
+    bowed_cello_initialize);
+INSTRUMENT_DESCRIPTOR(
+    ncr2_effect_clarinet,
+    EFFECT_OPEN_CLARINET_ID,
+    "Transform · Clarinet",
     clarinet_initialize);
-INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_synth_brass,
-    EFFECT_OPEN_SYNTH_BRASS_ID,
-    "Instrument · Synth Brass",
-    brass_initialize);
-INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_synth_bass,
-    EFFECT_OPEN_SYNTH_BASS_ID,
-    "Instrument · Synth Bass",
-    bass_initialize);
-INSTRUMENT_DESCRIPTOR(
-    ncr2_effect_bell_marimba,
-    EFFECT_OPEN_BELL_MARIMBA_ID,
-    "Instrument · Bell / Marimba",
-    bell_initialize);
 
 static const effect_descriptor_t *const instrument_effects[] = {
-    &ncr2_effect_bowed_ensemble,
-    &ncr2_effect_cello_voice,
-    &ncr2_effect_violin_voice,
-    &ncr2_effect_tonewheel_organ,
-    &ncr2_effect_clarinet_voice,
-    &ncr2_effect_synth_brass,
-    &ncr2_effect_synth_bass,
-    &ncr2_effect_bell_marimba,
+    &ncr2_effect_steel_acoustic,
+    &ncr2_effect_nylon_classical,
+    &ncr2_effect_twelve_string,
+    &ncr2_effect_banjo,
+    &ncr2_effect_sitar,
+    &ncr2_effect_upright_bass,
+    &ncr2_effect_bowed_cello,
+    &ncr2_effect_clarinet,
 };
 
 const effect_registry_t ncr2_instrument_effect_registry = {
@@ -898,8 +945,8 @@ uint16_t ncr2_instrument_get_note_state(
         return EFFECT_RUNTIME_INVALID_ARGUMENT;
     }
     effect_id = instance->descriptor->key.effect_id;
-    if (effect_id < EFFECT_OPEN_BOWED_ENSEMBLE_ID ||
-        effect_id > EFFECT_OPEN_BELL_MARIMBA_ID) {
+    if (effect_id < EFFECT_OPEN_STEEL_ACOUSTIC_ID ||
+        effect_id > EFFECT_OPEN_CLARINET_ID) {
         return EFFECT_RUNTIME_EFFECT_NOT_FOUND;
     }
     *state = ((const instrument_context_t *)instance->context)->note;

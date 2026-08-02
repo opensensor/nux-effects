@@ -161,7 +161,7 @@ class CodegenTests(unittest.TestCase):
 
     def test_instrument_exports_use_the_shipped_public_identity(self):
         effect = {
-            "name": "Instrument · Tonewheel Organ",
+            "name": "Transform · Banjo",
             "vendor_id": codegen.VENDOR_OPEN,
             "effect_id": 0x103,
             "parameters": [
@@ -170,7 +170,7 @@ class CodegenTests(unittest.TestCase):
             ],
         }
         program = codegen.ProgramSpec(
-            "Organ",
+            "Banjo",
             11,
             (
                 codegen.ProgramNode(
@@ -182,7 +182,7 @@ class CodegenTests(unittest.TestCase):
         )
         source = codegen.generate_program_source(program, [effect])
         self.assertIn('#include "effects_instrument.h"', source)
-        self.assertIn("EFFECT_OPEN_TONEWHEEL_ORGAN_ID", source)
+        self.assertIn("EFFECT_OPEN_BANJO_ID", source)
         self.assertIn("EFFECT_INSTRUMENT_PARAMETER_TRANSFORMATION", source)
 
 
@@ -374,10 +374,14 @@ class BrowserBankAndDfuTests(unittest.TestCase):
         self.assertIn('<option value="60">60 s</option>', page)
         self.assertIn("Recorded guitar / audio input", page)
         self.assertIn('value="guitar"', page)
+        self.assertIn('value="harmonic"', page)
         self.assertIn('id="dfu-connect"', page)
         self.assertIn('id="dfu-install"', page)
         self.assertIn("OPEN_ENGINE_LAYOUT", script)
         self.assertIn("OPTIONAL_ENGINE_PACKS", script)
+        self.assertIn('"Steel Acoustic"', script)
+        self.assertIn('"Clarinet"', script)
+        self.assertIn("waveformReplacement", script)
         self.assertIn('id="engine-pack-select"', page)
         self.assertIn('id="load-engine-pack"', page)
         self.assertIn('schema: "ncr2-open-engine-bank"', script)
@@ -611,8 +615,8 @@ class HostRenderTests(unittest.TestCase):
         self.assertTrue(catalog.ok, catalog.error)
         names = [effect["name"] for effect in catalog.report["effects"]]
         self.assertEqual(names[:2], ["Basic Gain", "Basic Soft Clip"])
-        self.assertIn("Instrument · Bowed Ensemble", names)
-        self.assertIn("Instrument · Bell / Marimba", names)
+        self.assertIn("Transform · Steel Acoustic", names)
+        self.assertIn("Transform · Clarinet", names)
         self.assertEqual(names[-1], "Tape Sat")
 
         verified = self.builder.verify(result.binary, 48000, 64, 2)
@@ -755,7 +759,7 @@ class HostRenderTests(unittest.TestCase):
         )
         result = self.build(
             [],
-            codegen.ProgramSpec("Tonewheel", 10, (node,)),
+            codegen.ProgramSpec("Banjo", 10, (node,)),
         )
         for expected in (110.0, 220.0, 440.0, 880.0):
             frames = 48000
@@ -795,6 +799,63 @@ class HostRenderTests(unittest.TestCase):
                 0.04,
                 (expected, best_frequency),
             )
+
+    def test_instrument_targets_replace_register_and_harmonic_family(self):
+        frames = 96000
+        payload = struct.pack(
+            f"<{frames}f",
+            *(
+                0.16 * math.sin(2.0 * math.pi * 220.0 * frame / 48000.0)
+                for frame in range(frames)
+            ),
+        )
+
+        def render(effect_id):
+            result = self.build(
+                [],
+                codegen.ProgramSpec(
+                    "Transform probe",
+                    effect_id,
+                    (codegen.ProgramNode(codegen.VENDOR_OPEN, effect_id),),
+                ),
+            )
+            rendered = self.builder.render(
+                result.binary, payload, 48000, 64, 1
+            )
+            self.assertTrue(rendered.ok, rendered.error)
+            return samples(rendered.audio)[-24000:]
+
+        def amplitude(values, frequency):
+            real = 0.0
+            imaginary = 0.0
+            for index, value in enumerate(values):
+                angle = 2.0 * math.pi * frequency * index / 48000.0
+                real += value * math.cos(angle)
+                imaginary -= value * math.sin(angle)
+            return 2.0 * math.hypot(real, imaginary) / len(values)
+
+        upright = render(0x105)
+        self.assertGreater(
+            amplitude(upright, 110.0),
+            amplitude(upright, 220.0) * 1.5,
+        )
+
+        banjo = render(0x103)
+        clarinet = render(0x107)
+
+        def odd_even_ratio(values):
+            odd = 0.0
+            even = 0.0
+            for harmonic in range(1, 9):
+                energy = amplitude(values, 220.0 * harmonic) ** 2
+                if harmonic % 2:
+                    odd += energy
+                else:
+                    even += energy
+            return odd / max(even, 1.0e-12)
+
+        self.assertLess(odd_even_ratio(banjo), 4.0)
+        self.assertGreater(odd_even_ratio(clarinet), 100.0)
 
     def test_instrument_defaults_are_level_safe_on_real_clean_guitar(self):
         recording = EDITOR / "static" / "audio" / "clean-guitar-di.wav"
@@ -1067,14 +1128,14 @@ class HardwareAppRenderTests(unittest.TestCase):
         self.assertEqual(
             names[2:10],
             [
-                "Instrument · Bowed Ensemble",
-                "Instrument · Cello",
-                "Instrument · Violin",
-                "Instrument · Tonewheel Organ",
-                "Instrument · Clarinet",
-                "Instrument · Synth Brass",
-                "Instrument · Synth Bass",
-                "Instrument · Bell / Marimba",
+                "Transform · Steel Acoustic",
+                "Transform · Nylon Classical",
+                "Transform · Twelve String",
+                "Transform · Banjo",
+                "Transform · Sitar",
+                "Transform · Upright Bass",
+                "Transform · Bowed Cello",
+                "Transform · Clarinet",
             ],
         )
         preset = catalog.report["effects"][10]

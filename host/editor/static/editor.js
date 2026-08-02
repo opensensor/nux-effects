@@ -59,18 +59,23 @@ const OPTIONAL_ENGINE_PACKS = [
     id: "instrument-lab",
     name: "Instrument Lab",
     summary:
-      "Full-wet monophonic instrument resynthesis by default; bends and playing dynamics remain continuous.",
+      "Phase-aligned harmonic transplantation into string bodies and a clarinet bore; the dry waveform is not part of the wet output.",
     effects: [
-      [0x100, "Bowed Ensemble"],
-      [0x101, "Cello"],
-      [0x102, "Violin"],
-      [0x103, "Tonewheel Organ"],
-      [0x104, "Clarinet"],
-      [0x105, "Synth Brass"],
-      [0x106, "Synth Bass"],
-      [0x107, "Bell / Marimba"],
+      [0x100, "Steel Acoustic"],
+      [0x101, "Nylon Classical"],
+      [0x102, "Twelve String"],
+      [0x103, "Banjo"],
+      [0x104, "Sitar"],
+      [0x105, "Upright Bass"],
+      [0x106, "Bowed Cello"],
+      [0x107, "Clarinet"],
     ],
   },
+];
+
+const LEGACY_INSTRUMENT_NAMES = [
+  "Bowed Ensemble", "Cello", "Violin", "Tonewheel Organ",
+  "Clarinet", "Synth Brass", "Synth Bass", "Bell / Marimba",
 ];
 
 function emptyProgram(engine, position) {
@@ -348,6 +353,24 @@ function applyEngineBankDocument(document) {
     };
   });
 
+  /* The spectral-transformation prototype deliberately reuses the
+     experimental 0x100–0x107 identities. Rename an untouched saved copy of
+     the old pack, but leave user-authored or individually renamed programs
+     alone. */
+  imported.forEach((engine) => {
+    const untouchedLegacyPack = engine.effects.every((program, position) =>
+      program.name === LEGACY_INSTRUMENT_NAMES[position] &&
+      program.nodes.length === 1 &&
+      program.nodes[0].vendorId === OPEN_VENDOR_ID &&
+      program.nodes[0].effectId === 0x100 + position,
+    );
+    if (!untouchedLegacyPack) return;
+    engine.name = "Instrument Lab";
+    engine.effects.forEach((program, position) => {
+      program.name = OPTIONAL_ENGINE_PACKS[0].effects[position][1];
+    });
+  });
+
   state.openEngines = imported;
   state.sources = Array.isArray(document.sources)
     ? document.sources.map((source) => {
@@ -384,7 +407,8 @@ function applyEngineBankDocument(document) {
     Math.min(7, Number(workspace.active_effect) || 0),
   );
   state.signal = [
-    "guitar", "pluck", "chord", "sine", "sweep", "noise", "impulse",
+    "guitar", "pluck", "chord", "harmonic", "sine", "sweep", "noise",
+    "impulse",
   ].includes(workspace.signal) ? workspace.signal : "guitar";
   state.inputLevelDb = Number.isFinite(Number(workspace.input_level_db))
     ? Math.max(-30, Math.min(18, Number(workspace.input_level_db)))
@@ -557,6 +581,26 @@ function generateSignal(kind) {
         RENDER_SECONDS - offset / rate,
         0x9e3779b9 + index * 2654435761,
       );
+    });
+  } else if (kind === "harmonic") {
+    const notes = [110.0, 146.83, 196.0, 220.0];
+    const noteFrames = Math.floor(frames / notes.length);
+    notes.forEach((frequency, note) => {
+      const start = note * noteFrames;
+      const end = note === notes.length - 1 ? frames : start + noteFrames;
+      for (let index = start; index < end; index += 1) {
+        const local = index - start;
+        const remaining = end - index;
+        const envelope = Math.min(1, local / (0.008 * rate)) *
+          Math.min(1, remaining / (0.045 * rate)) *
+          Math.exp((-1.3 * local) / noteFrames);
+        for (let partial = 1; partial <= 12; partial += 1) {
+          const profile = 1 / Math.pow(partial, 0.72);
+          mono[index] += envelope * profile * Math.sin(
+            (2 * Math.PI * frequency * partial * local) / rate,
+          );
+        }
+      }
     });
   } else if (kind === "sine") {
     for (let index = 0; index < frames; index += 1) {
@@ -1603,6 +1647,35 @@ function metricRow(label, value, level) {
   return row;
 }
 
+function waveformReplacement(input, output) {
+  if (!input || !output || input.length !== output.length || input.length < 2) {
+    return null;
+  }
+  const skip = Math.min(
+    input.length - 1,
+    Math.floor(state.sampleRate * state.channels * 0.5),
+  );
+  let inputEnergy = 0;
+  let outputEnergy = 0;
+  let cross = 0;
+  for (let index = skip; index < input.length; index += 1) {
+    inputEnergy += input[index] * input[index];
+    outputEnergy += output[index] * output[index];
+    cross += input[index] * output[index];
+  }
+  if (inputEnergy <= 0 || outputEnergy <= 0) return null;
+  const dryScale = cross / inputEnergy;
+  let residualEnergy = 0;
+  for (let index = skip; index < input.length; index += 1) {
+    const residual = output[index] - dryScale * input[index];
+    residualEnergy += residual * residual;
+  }
+  return {
+    correlation: cross / Math.sqrt(inputEnergy * outputEnergy),
+    residual: Math.sqrt(residualEnergy / outputEnergy),
+  };
+}
+
 function updateMetrics(report) {
   const body = dom.metrics.querySelector("tbody");
   body.replaceChildren();
@@ -1647,6 +1720,14 @@ function updateMetrics(report) {
     ),
   );
   body.append(metricRow("RMS change", formatDb(change)));
+  const replacement = waveformReplacement(state.input, state.output);
+  if (replacement !== null) {
+    body.append(metricRow(
+      "Waveform replacement",
+      `${(replacement.residual * 100).toFixed(1)}% non-dry residual · ` +
+        `${(replacement.correlation * 100).toFixed(1)}% correlation`,
+    ));
+  }
   body.append(
     metricRow(
       "Non-finite samples",
