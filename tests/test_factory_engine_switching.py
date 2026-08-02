@@ -86,9 +86,9 @@ class FactoryEngineSwitchingTests(unittest.TestCase):
         table = source[table_start:table_end]
         for effect in (
             "NCR2_EFFECT_SHINE_DRIVE",
-            "NCR2_EFFECT_BOWED_ENSEMBLE",
+            "NCR2_EFFECT_BREATHE_VIBE",
             "NCR2_EFFECT_ECHOES_TAPE",
-            "NCR2_EFFECT_BELL_MARIMBA",
+            "NCR2_EFFECT_GUERRILLA_TREM",
         ):
             self.assertIn(effect, table)
         self.assertIn(

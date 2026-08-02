@@ -1,10 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef NCR2_HARDWARE_APP_INSTRUMENT_SLOT
-#define NCR2_HARDWARE_APP_INSTRUMENT_SLOT 0
-#endif
-
 #include "factory_audio.h"
 #include "factory_board.h"
 #include "MIMXRT1051.h"
@@ -13,11 +9,6 @@
 
 #include "codec_probe.h"
 #include "footswitch_gesture.h"
-
-#if NCR2_HARDWARE_APP_INSTRUMENT_SLOT
-#include "effect_runtime.h"
-#include "effects_instrument.h"
-#endif
 
 #include "boot_recovery_request.h"
 #include "boot_trial.h"
@@ -94,11 +85,7 @@
 #define NCR2_EFFECT_ROUTE_SETTLE_MS UINT32_C(20)
 /* Eight physical Type detents select programs inside the current engine. */
 #define NCR2_EFFECT_COUNT UINT32_C(8)
-#define NCR2_OPEN_EFFECT_COUNT UINT32_C(40)
-#define NCR2_INSTRUMENT_EFFECT_COUNT UINT32_C(8)
-#define NCR2_INSTRUMENT_CONTEXT_BYTES UINT32_C(3072)
-#define NCR2_INSTRUMENT_MIX 0.90F
-#define NCR2_INSTRUMENT_SENSITIVITY 0.012F
+#define NCR2_OPEN_EFFECT_COUNT UINT32_C(32)
 #define NCR2_SELECTOR_SETTLE_SAMPLES UINT32_C(3)
 /*
  * Measured detent spacing is about 511 counts and resting noise never
@@ -530,16 +517,6 @@ enum
     NCR2_EFFECT_PLATE_REVERB = 29,
     NCR2_EFFECT_SHIMMER_SPACE = 30,
     NCR2_EFFECT_SPRING_TANK = 31,
-
-    /* Optional engine trial in slot 7: Instrument Lab. */
-    NCR2_EFFECT_BOWED_ENSEMBLE = 32,
-    NCR2_EFFECT_CELLO = 33,
-    NCR2_EFFECT_VIOLIN = 34,
-    NCR2_EFFECT_TONEWHEEL_ORGAN = 35,
-    NCR2_EFFECT_CLARINET = 36,
-    NCR2_EFFECT_SYNTH_BRASS = 37,
-    NCR2_EFFECT_SYNTH_BASS = 38,
-    NCR2_EFFECT_BELL_MARIMBA = 39,
 };
 
 /*
@@ -569,14 +546,14 @@ static const uint8_t g_open_engine_effects
         NCR2_EFFECT_NOISE_GATE,
     },
     {
-        NCR2_EFFECT_BOWED_ENSEMBLE,
-        NCR2_EFFECT_CELLO,
-        NCR2_EFFECT_VIOLIN,
-        NCR2_EFFECT_TONEWHEEL_ORGAN,
-        NCR2_EFFECT_CLARINET,
-        NCR2_EFFECT_SYNTH_BRASS,
-        NCR2_EFFECT_SYNTH_BASS,
-        NCR2_EFFECT_BELL_MARIMBA,
+        NCR2_EFFECT_BREATHE_VIBE,
+        NCR2_EFFECT_GUERRILLA_TREM,
+        NCR2_EFFECT_DIMENSION_CHORUS,
+        NCR2_EFFECT_JET_FLANGER,
+        NCR2_EFFECT_PHASE_ORBIT,
+        NCR2_EFFECT_ROTARY_CAB,
+        NCR2_EFFECT_AUTO_WAH,
+        NCR2_EFFECT_WHAMMY_FUZZ,
     },
     {
         NCR2_EFFECT_ECHOES_TAPE,
@@ -803,20 +780,6 @@ static int32_t g_multi_state[8];
 static int32_t g_cabinet_history[8];
 static int32_t g_delay_buffer[NCR2_DELAY_BUFFER_FRAMES]
     __attribute__((section(".sdram_bss"), aligned(32)));
-#if NCR2_HARDWARE_APP_INSTRUMENT_SLOT
-typedef struct ncr2_instrument_adapter {
-    effect_chain_t chain;
-    effect_instance_t instance;
-    uint8_t context[NCR2_INSTRUMENT_CONTEXT_BYTES]
-        __attribute__((aligned(16)));
-    uint32_t voice;
-    uint32_t amount_q15;
-    uint32_t character_q15;
-    uint32_t status;
-} ncr2_instrument_adapter_t;
-
-static ncr2_instrument_adapter_t g_instrument_adapter;
-#endif
 
 static uint32_t clamp_knob(uint32_t value)
 {
@@ -1074,21 +1037,6 @@ static void reset_transient_effect_state(void)
 
 static void initialize_effect_processor(void)
 {
-#if NCR2_HARDWARE_APP_INSTRUMENT_SLOT
-    g_instrument_adapter.status =
-        (uint32_t)effect_chain_initialize(
-            &g_instrument_adapter.chain,
-            &ncr2_instrument_effect_registry,
-            &g_instrument_adapter.instance,
-            UINT32_C(1),
-            g_instrument_adapter.context,
-            sizeof(g_instrument_adapter.context),
-            NCR2_FACTORY_AUDIO_SAMPLE_RATE_HZ,
-            NCR2_FACTORY_AUDIO_FRAMES_PER_BLOCK);
-    g_instrument_adapter.voice = UINT32_MAX;
-    g_instrument_adapter.amount_q15 = UINT32_MAX;
-    g_instrument_adapter.character_q15 = UINT32_MAX;
-#endif
     for (uint32_t frame = UINT32_C(0);
          frame < NCR2_DELAY_BUFFER_FRAMES;
          ++frame) {
@@ -1180,101 +1128,6 @@ static ncr2_effect_parameters_t make_effect_parameters(
     return parameters;
 }
 
-#if NCR2_HARDWARE_APP_INSTRUMENT_SLOT
-static int32_t process_instrument_effect(
-    int32_t input,
-    const ncr2_effect_parameters_t *parameters)
-{
-    const uint32_t voice =
-        g_current_effect - NCR2_EFFECT_BOWED_ENSEMBLE;
-    float sample;
-    effect_audio_block_t block;
-
-    block.frame_count = UINT32_C(1);
-    block.channel_count = UINT8_C(1);
-
-    if (voice >= NCR2_INSTRUMENT_EFFECT_COUNT ||
-        g_instrument_adapter.status != EFFECT_RUNTIME_OK) {
-        return input;
-    }
-    if (voice != g_instrument_adapter.voice) {
-        const effect_key_t key = {
-            EFFECT_VENDOR_OPEN,
-            EFFECT_OPEN_BOWED_ENSEMBLE_ID + voice,
-        };
-
-        effect_chain_clear(&g_instrument_adapter.chain);
-        g_instrument_adapter.status =
-            (uint32_t)effect_chain_add(
-                &g_instrument_adapter.chain, key, NULL);
-        if (g_instrument_adapter.status != EFFECT_RUNTIME_OK) {
-            g_instrument_adapter.voice = UINT32_MAX;
-            return input;
-        }
-        g_instrument_adapter.voice = voice;
-        g_instrument_adapter.amount_q15 = UINT32_MAX;
-        g_instrument_adapter.character_q15 = UINT32_MAX;
-    }
-
-    if (parameters->amount_q15 != g_instrument_adapter.amount_q15 ||
-        parameters->character_q15 !=
-            g_instrument_adapter.character_q15) {
-        uint16_t status = effect_chain_set_parameter(
-            &g_instrument_adapter.chain,
-            0U,
-            EFFECT_INSTRUMENT_PARAMETER_ARTICULATION,
-            (float)parameters->amount_q15 /
-                (float)NCR2_PARAMETER_Q15_ONE);
-
-        if (status == EFFECT_RUNTIME_OK) {
-            status = effect_chain_set_parameter(
-                &g_instrument_adapter.chain,
-                0U,
-                EFFECT_INSTRUMENT_PARAMETER_CHARACTER,
-                (float)parameters->character_q15 /
-                    (float)NCR2_PARAMETER_Q15_ONE);
-        }
-        if (status == EFFECT_RUNTIME_OK) {
-            status = effect_chain_set_parameter(
-                &g_instrument_adapter.chain,
-                0U,
-                EFFECT_INSTRUMENT_PARAMETER_MIX,
-                NCR2_INSTRUMENT_MIX);
-        }
-        if (status == EFFECT_RUNTIME_OK) {
-            status = effect_chain_set_parameter(
-                &g_instrument_adapter.chain,
-                0U,
-                EFFECT_INSTRUMENT_PARAMETER_SENSITIVITY,
-                NCR2_INSTRUMENT_SENSITIVITY);
-        }
-        g_instrument_adapter.status = (uint32_t)status;
-        if (status != EFFECT_RUNTIME_OK) {
-            return input;
-        }
-        g_instrument_adapter.amount_q15 = parameters->amount_q15;
-        g_instrument_adapter.character_q15 =
-            parameters->character_q15;
-    }
-
-    sample = (float)input / (float)NCR2_SAFE_OUTPUT_PEAK;
-    block.channels[0] = &sample;
-    g_instrument_adapter.status =
-        (uint32_t)effect_chain_process(
-            &g_instrument_adapter.chain, &block);
-    if (g_instrument_adapter.status != EFFECT_RUNTIME_OK) {
-        return input;
-    }
-    sample *= (float)NCR2_SAFE_OUTPUT_PEAK;
-    if (sample > (float)NCR2_SAFE_OUTPUT_PEAK) {
-        sample = (float)NCR2_SAFE_OUTPUT_PEAK;
-    } else if (sample < -(float)NCR2_SAFE_OUTPUT_PEAK) {
-        sample = -(float)NCR2_SAFE_OUTPUT_PEAK;
-    }
-    return (int32_t)sample;
-}
-#endif
-
 static int32_t process_selected_effect(
     int32_t input,
     const ncr2_effect_parameters_t *parameters)
@@ -1296,19 +1149,6 @@ static int32_t process_selected_effect(
             parameters,
             g_current_effect - NCR2_EFFECT_AMP_GLASS_CLEAN);
         break;
-
-#if NCR2_HARDWARE_APP_INSTRUMENT_SLOT
-    case NCR2_EFFECT_BOWED_ENSEMBLE:
-    case NCR2_EFFECT_CELLO:
-    case NCR2_EFFECT_VIOLIN:
-    case NCR2_EFFECT_TONEWHEEL_ORGAN:
-    case NCR2_EFFECT_CLARINET:
-    case NCR2_EFFECT_SYNTH_BRASS:
-    case NCR2_EFFECT_SYNTH_BASS:
-    case NCR2_EFFECT_BELL_MARIMBA:
-        sample = process_instrument_effect(input, parameters);
-        break;
-#endif
 
     case NCR2_EFFECT_SHINE_DRIVE:
         {

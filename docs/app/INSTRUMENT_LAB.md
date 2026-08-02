@@ -1,7 +1,6 @@
 # Instrument Lab engine pack
 
-Status: host-preview engine and v0.25 hardware trial. It is not part of the
-stable v0.24 hardware image.
+Status: host-preview prototype. It is not part of the v0.24 hardware image.
 
 Instrument Lab adds a fifth, optional eight-program engine without removing
 the existing Open Amp Studio, Drive + Dynamics, Motion + Pitch, or Echo +
@@ -21,11 +20,18 @@ The eight initial voices are:
 7. Synth Bass
 8. Bell / Marimba
 
-The v0.25 trial assigns this entire list to open engine slot 7. Amp Studio
-remains in slot 5, Drive + Dynamics remains in slot 6, and Echo + Space remains
-in slot 8. Hold the footswitch with Type at position 7 to load Instrument Lab;
-after the reboot, the eight normal Type detents select the voices above. Amount
-controls articulation, Tweak controls character, and Level controls output.
+### Rejected v0.25 hardware trial
+
+The first device integration was rejected after live guitar testing through a
+Marshall tube amplifier. Its oscillator voices did not resemble the browser
+preview, real-guitar tracking was unstable and harsh, and the physical control
+surface could not reproduce the editor's four parameters: Mix and Tracking
+Sensitivity were fixed while only Articulation and Character reached panel
+knobs. Clean synthetic-tone pitch tests were therefore insufficient evidence
+for a playable hardware build. The pedal was restored to v0.24, and another
+Instrument Lab image must not be approved without captured-pedal input tests,
+on-target deadline measurements, and explicit mappings for every editor
+control.
 
 ## Signal model
 
