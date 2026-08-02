@@ -58,8 +58,28 @@ with the audio device.
 
 The current code has passed strict ARM compilation, RAM-only post-link checks,
 and host tests for PCM packing, clock-elastic packet sizing, underflow, and
-overflow. It has not yet been flashed for physical USB Audio enumeration. Do
-not treat the build gate as hardware validation.
+overflow.
+
+## First physical result
+
+On 2026-08-02, v0.26.0/build 58 was installed to inactive slot B of the Verb
+Core Deluxe through Open Recover. Its application payload SHA-256 was
+`774a019d1e62af8e7872889c0fbec025e8fb2bff263501fd58607fc91e121dbf`.
+The normal app then:
+
+- enumerated at high speed as bench identity `cafe:4e58`;
+- reported manufacturer `OpenSensor` and product
+  `NCR-2 Open Pedal Audio`;
+- registered as an ALSA and PipeWire mono capture source;
+- advertised only signed 24-bit little-endian, one channel, 48 kHz; and
+- completed a continuous three-second/144,000-frame capture without a USB
+  error or disconnect.
+
+No guitar was played during that recording, so its approximately -89 dBFS
+peak represents idle capture, not validation of musical signal level or sound
+quality. A played-guitar recording and browser live-preview audition remain
+the next physical checks. The `cafe:4e58` identity is bench-only and must be
+replaced with a project-owned VID/PID before distribution.
 
 ## Editor behavior
 

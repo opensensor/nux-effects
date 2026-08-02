@@ -145,9 +145,10 @@ The intended direct connection is guitar → pedal input and pedal USB-C →
 computer. The separately gated normal hardware application now has a UAC1
 capture path that presents the pedal's dry 48 kHz/24-bit mono input as
 **NCR-2 Open Pedal Audio**; see
-[USB_AUDIO.md](../hardware/USB_AUDIO.md). It is compile-validated but awaits a
-distinct assigned USB product ID and physical enumeration before it is part of
-a pedal release.
+[USB_AUDIO.md](../hardware/USB_AUDIO.md). The v0.26.0 bench build has completed
+physical high-speed enumeration and sustained ALSA capture. Played-guitar and
+browser audition remain to be checked, and its temporary bench identity must
+be replaced by a project-owned USB identity before a release.
 
 Open Recover itself cannot provide live playing: recovery mode deliberately
 does not initialize the analog audio engine, and its HID interface carries
