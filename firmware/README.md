@@ -78,10 +78,14 @@ Implemented:
   buffers, a weak source DSP hook, and offline register/ISR emulation.
 - separately gated factory GPIO startup levels and the observed delayed
   GPIO1_IO26 transition, with offline pin-state emulation.
+- a separately gated normal-application USB Audio capture path that taps the
+  dry SAI stream without blocking analog DSP, plus a distinct recovery/audio
+  PID build gate. It is ARM compile-validated and awaits physical enumeration.
 
 Not implemented:
 
 - a project USB VID/PID;
+- physical validation of normal-application USB Audio capture;
 - physical validation of a complete 8 MiB restore through Open Recover;
 - source-controlled MPU/data-cache policy for the full open application;
 - source SEMC initialization;

@@ -14,10 +14,12 @@ const DEBOUNCE_MS = 140;
 const FFT_SIZE = 4096;
 const STRING_FREQUENCIES = [82.41, 110.0, 146.83, 196.0, 246.94, 329.63];
 const WORKSPACE_STORAGE_KEY = "ncr2-open-effect-lab-workspace-v2";
+const AUDIO_INPUT_STORAGE_KEY = "ncr2-open-effect-lab-audio-input-v1";
 const REVIEW_STATUSES = new Set(["unreviewed", "keep", "tune", "replace"]);
 const HARDWARE_PRESET_VENDOR_ID = 0x4f50454e;
 const HARDWARE_PRESET_FIRST_ID = 0x0b000001;
 const HARDWARE_PRESET_COUNT = 32;
+const PEDAL_AUDIO_PRODUCT_NAME = "NCR-2 Open Pedal Audio";
 
 const OPEN_ENGINE_LAYOUT = [
   {
@@ -117,6 +119,7 @@ const state = {
   userAudio: null,
   guitarBytes: null,
   guitarAudio: null,
+  audioInputDeviceId: "auto",
   includeHardwareApp: false,
   dfu: null,
   dfuInfo: null,
@@ -241,6 +244,7 @@ function persistWorkspace() {
       WORKSPACE_STORAGE_KEY,
       JSON.stringify(engineBankDocument()),
     );
+    localStorage.setItem(AUDIO_INPUT_STORAGE_KEY, state.audioInputDeviceId);
   } catch (error) {
     /* Private browsing and storage quotas must not disable the editor. */
   }
@@ -364,6 +368,8 @@ function applyEngineBankDocument(document) {
 
 function restoreWorkspace() {
   try {
+    state.audioInputDeviceId =
+      localStorage.getItem(AUDIO_INPUT_STORAGE_KEY) || "auto";
     const saved = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (!saved) return false;
     applyEngineBankDocument(JSON.parse(saved));
@@ -628,15 +634,7 @@ async function loadBundledGuitar() {
 }
 
 async function captureMicrophone(seconds = 6.0) {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      autoGainControl: false,
-      echoCancellation: false,
-      noiseSuppression: false,
-      channelCount: 1,
-      sampleRate: state.sampleRate,
-    },
-  });
+  const stream = await acquireAudioInput();
   const context = new AudioContext({ sampleRate: state.sampleRate });
   const source = context.createMediaStreamSource(stream);
   const processorFrames = 4096;
@@ -692,8 +690,88 @@ const livePreview = {
   outputNodes: new Set(),
   nextStart: 0,
   dropped: 0,
+  deviceLabel: "",
 };
 let liveRestartTimer = null;
+
+function audioInputConstraints(deviceId = state.audioInputDeviceId) {
+  return {
+    autoGainControl: false,
+    echoCancellation: false,
+    noiseSuppression: false,
+    channelCount: 1,
+    sampleRate: state.sampleRate,
+    ...(!["auto", "default", ""].includes(deviceId)
+      ? { deviceId: { exact: deviceId } }
+      : {}),
+  };
+}
+
+function selectedAudioInputLabel() {
+  return dom.audioInputDevice?.selectedOptions?.[0]?.textContent ||
+    "system default audio input";
+}
+
+async function refreshAudioInputDevices(preferredId = state.audioInputDeviceId) {
+  if (!dom.audioInputDevice || !navigator.mediaDevices?.enumerateDevices) {
+    return;
+  }
+  const devices = (await navigator.mediaDevices.enumerateDevices())
+    .filter((device) => device.kind === "audioinput" &&
+      !["default", "communications"].includes(device.deviceId));
+  const autoOption = document.createElement("option");
+  autoOption.value = "auto";
+  autoOption.textContent = "Auto-detect pedal / system default";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "default";
+  defaultOption.textContent = "System default audio input";
+  dom.audioInputDevice.replaceChildren(autoOption, defaultOption);
+  devices.forEach((device, index) => {
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    option.textContent = device.label || `Audio input ${index + 1}`;
+    dom.audioInputDevice.append(option);
+  });
+
+  let selected = preferredId;
+  if (!["auto", "default"].includes(selected) &&
+      !devices.some((device) => device.deviceId === selected)) {
+    selected = "auto";
+  }
+  if (selected === "auto") {
+    const pedal = devices.find((device) =>
+      device.label.toLowerCase().includes(
+        PEDAL_AUDIO_PRODUCT_NAME.toLowerCase(),
+      ));
+    if (pedal) selected = pedal.deviceId;
+  }
+  state.audioInputDeviceId = selected;
+  dom.audioInputDevice.value = selected;
+  persistWorkspace();
+}
+
+async function acquireAudioInput() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("this browser does not expose audio capture");
+  }
+  let stream = await navigator.mediaDevices.getUserMedia({
+    audio: audioInputConstraints(),
+  });
+  const acquiredId = stream.getAudioTracks()[0]?.getSettings?.().deviceId || "";
+  if (state.audioInputDeviceId === "auto") {
+    await refreshAudioInputDevices();
+    if (!["auto", "default", ""].includes(state.audioInputDeviceId) &&
+        state.audioInputDeviceId !== acquiredId) {
+      stream.getTracks().forEach((track) => track.stop());
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: audioInputConstraints(state.audioInputDeviceId),
+      });
+    }
+  } else {
+    await refreshAudioInputDevices(state.audioInputDeviceId);
+  }
+  return stream;
+}
 
 function currentOverrides() {
   return state.program.nodes.flatMap((node, index) =>
@@ -716,6 +794,8 @@ function updateLivePreviewState(message = "") {
     dom.liveInputState.textContent = message || (livePreview.active
       ? `Native DSP is live${livePreview.dropped
         ? ` · ${livePreview.dropped} late chunk(s) dropped`
+        : ""}${livePreview.deviceLabel
+        ? ` · ${livePreview.deviceLabel}`
         : ""}`
       : "Use headphones or a muted monitor path to prevent feedback.");
   }
@@ -812,15 +892,10 @@ async function startLivePreview() {
   livePreview.starting = true;
   updateLivePreviewState("Requesting the raw instrument input…");
   try {
-    livePreview.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        autoGainControl: false,
-        echoCancellation: false,
-        noiseSuppression: false,
-        channelCount: 1,
-        sampleRate: state.sampleRate,
-      },
-    });
+    livePreview.stream = await acquireAudioInput();
+    livePreview.deviceLabel =
+      livePreview.stream.getAudioTracks()[0]?.label ||
+      selectedAudioInputLabel();
     livePreview.context = new AudioContext({ sampleRate: state.sampleRate });
     await livePreview.context.resume();
     await startNativeLiveSession();
@@ -910,6 +985,7 @@ async function stopLivePreview(notifyServer = true) {
   livePreview.source = null;
   livePreview.processor = null;
   livePreview.silent = null;
+  livePreview.deviceLabel = "";
   livePreview.processing = false;
   livePreview.restarting = false;
   updateLivePreviewState();
@@ -2646,9 +2722,9 @@ async function changeSignal() {
     setStatus("recording 6 s from the raw instrument input…", "busy");
     try {
       state.userAudio = await captureMicrophone();
-      setStatus("captured microphone input", "ok");
+      setStatus(`captured ${selectedAudioInputLabel()}`, "ok");
     } catch (error) {
-      setStatus(`microphone unavailable: ${error.message}`, "error");
+      setStatus(`audio input unavailable: ${error.message}`, "error");
       return;
     }
   }
@@ -2676,6 +2752,7 @@ function bind() {
   dom.liveInput = query("live-input");
   dom.liveInputState = query("live-input-state");
   dom.signal = query("signal");
+  dom.audioInputDevice = query("audio-input-device");
   dom.fileInput = query("file-input");
   dom.sampleRate = query("sample-rate");
   dom.blockFrames = query("block-frames");
@@ -2867,6 +2944,24 @@ function bind() {
     changeSignal().catch((error) => setStatus(error.message, "error"));
   });
 
+  dom.audioInputDevice.addEventListener("change", () => {
+    state.audioInputDeviceId = dom.audioInputDevice.value;
+    persistWorkspace();
+    if (livePreview.active) {
+      stopLivePreview().then(() => startLivePreview()).catch((error) => {
+        setStatus(`could not switch audio input: ${error.message}`, "error");
+      });
+    }
+  });
+
+  query("refresh-audio-inputs").addEventListener("click", () => {
+    refreshAudioInputDevices().then(() => {
+      setStatus(`audio input: ${selectedAudioInputLabel()}`, "ok");
+    }).catch((error) => {
+      setStatus(`could not list audio inputs: ${error.message}`, "error");
+    });
+  });
+
   dom.fileInput.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2995,6 +3090,11 @@ async function start() {
   updateMetrics(null);
   updateLevelMatchNote();
   updateLivePreviewState();
+  await refreshAudioInputDevices().catch(() => {});
+
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+    refreshAudioInputDevices().catch(() => {});
+  });
 
   try {
     [state.session, state.visualCatalog] = await Promise.all([

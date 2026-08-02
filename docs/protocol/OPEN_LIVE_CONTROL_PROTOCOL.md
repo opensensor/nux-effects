@@ -4,11 +4,13 @@ Status: design target; not implemented by the current hardware application.
 
 ## Purpose and audio path
 
-Live control does not need to stream audio over USB. The instrument remains
-connected to the pedal's analog input and the amplifier or audio interface to
-its analog output. The running application owns SAI/eDMA and processes that
-audio with device latency; a browser WebHID connection carries only engine,
-effect, and parameter changes.
+Live control and USB Audio are separate responsibilities in the normal
+application. The instrument remains connected to the pedal's analog input and
+the amplifier to its analog output. The running application owns SAI/eDMA and
+processes that path with device latency. Its separately gated UAC1 interface
+can also copy the dry input to the browser for editor preview, while a future
+WebHID interface carries only engine, effect, and parameter changes. See
+[USB_AUDIO.md](../hardware/USB_AUDIO.md) for the implemented capture boundary.
 
 Open Recover is intentionally the wrong transport. Recovery owns flash update
 and rollback while application audio is stopped. The normal application must
@@ -17,9 +19,10 @@ HID interface without entering recovery or resetting the processor.
 
 ```text
 guitar -> ADC -> active DSP program -> DAC -> amplifier
-                         ^
-                         |
-browser editor -> WebHID control mailbox
+             |           ^
+             |           |
+             +-> USB Audio -> browser preview
+                 browser ----> WebHID control mailbox
 ```
 
 ## First useful command set
@@ -75,9 +78,13 @@ scope.
 
 ## Browser-side live preview
 
-Continuous host-only preview is a separate feature. It should compile the same
-generated DSP source to WebAssembly and run it in an `AudioWorklet` fed by a
-guitar audio interface. That gives useful drafting before a pedal build, while
-WebHID controls the authoritative device rendition after installation. A
-record-then-render preview remains valuable because it executes the native
-firmware runtime exactly and can produce deterministic measurements.
+Continuous host preview now sends bounded chunks from the selected browser
+audio input to one persistent native process on localhost. That process runs
+the same firmware effect chain and preserves envelopes, pitch tracking, and
+delay state across chunks. The browser automatically prefers the pedal's UAC1
+input when available, but ordinary interfaces continue to work.
+
+The localhost round trip is for drafting, not stage monitoring. The analog
+pedal path remains authoritative and lower latency. WebHID control will later
+let the editor apply an approved design to that running path without routing
+the performance through the host.

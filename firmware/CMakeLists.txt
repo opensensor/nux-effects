@@ -46,6 +46,11 @@ option(
     "Build the source-native SDRAM SAI/eDMA hardware application"
     OFF
 )
+option(
+    NCR2_HARDWARE_APP_USB_AUDIO
+    "Expose the normal hardware app's dry guitar input as USB Audio"
+    OFF
+)
 set(
     NCR2_HARDWARE_APP_PROFILE "audio"
     CACHE STRING
@@ -79,7 +84,7 @@ option(
 )
 option(
     NCR2_ENABLE_HARDWARE_USB_ENUMERATION
-    "Allow the hardware bootloader to enumerate with assigned USB IDs"
+    "Allow explicitly selected hardware firmware to enumerate over USB"
     OFF
 )
 option(
@@ -97,7 +102,13 @@ set(
     NCR2_OPEN_USB_PID
     "0"
     CACHE STRING
-    "Assigned open-firmware USB PID; ignored unless enumeration is enabled"
+    "Assigned Open Recover USB PID; ignored unless enumeration is enabled"
+)
+set(
+    NCR2_OPEN_AUDIO_USB_PID
+    "0"
+    CACHE STRING
+    "Assigned USB PID for normal-app audio; must differ from recovery"
 )
 set(
     NCR2_MCUX_SDK_ROOT
@@ -443,6 +454,98 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
         ${NCR2_HARDWARE_APP_SYSTEM_SOURCE}
         ${NCR2_HARDWARE_APP_CLOCK_SOURCE}
     )
+    target_compile_definitions(
+        ncr2_hardware_audio_app
+        PRIVATE
+            NCR2_HARDWARE_APP_USB_AUDIO=$<BOOL:${NCR2_HARDWARE_APP_USB_AUDIO}>
+    )
+    if(NCR2_HARDWARE_APP_USB_AUDIO)
+        if(NOT NCR2_ENABLE_HARDWARE_USB_ENUMERATION)
+            message(
+                FATAL_ERROR
+                "hardware-app USB audio requires explicit hardware USB enumeration"
+            )
+        endif()
+        math(EXPR NCR2_AUDIO_USB_PID_VALUE "${NCR2_OPEN_AUDIO_USB_PID}")
+        if(NCR2_AUDIO_USB_PID_VALUE LESS 1 OR
+           NCR2_AUDIO_USB_PID_VALUE GREATER 65535)
+            message(
+                FATAL_ERROR
+                "hardware-app USB audio requires a nonzero assigned audio PID"
+            )
+        endif()
+        if(NCR2_AUDIO_USB_PID_VALUE EQUAL NCR2_EFFECTIVE_USB_PID)
+            message(
+                FATAL_ERROR
+                "normal-app USB audio and Open Recover must use different PIDs"
+            )
+        endif()
+        if(NCR2_EFFECTIVE_USB_VID EQUAL 38183)
+            message(
+                FATAL_ERROR
+                "the borrowed NUX recovery VID/PID is not permitted for USB audio"
+            )
+        endif()
+
+        set(
+            NCR2_HARDWARE_USB_MIDDLEWARE
+            "${NCR2_MCUX_SDK_ROOT}/middleware/usb"
+        )
+        set(
+            NCR2_HARDWARE_USB_OUTPUT
+            "${NCR2_HARDWARE_USB_MIDDLEWARE}/output/source/device"
+        )
+        set(
+            NCR2_HARDWARE_USB_VENDOR_SOURCES
+            ${NCR2_MCUX_SDK_ROOT}/core/components/osa/fsl_os_abstraction_bm.c
+            ${NCR2_HARDWARE_USB_MIDDLEWARE}/device/usb_device_ehci.c
+            ${NCR2_HARDWARE_USB_MIDDLEWARE}/device/usb_device_dci.c
+            ${NCR2_HARDWARE_USB_MIDDLEWARE}/phy/usb_phy.c
+            ${NCR2_HARDWARE_USB_OUTPUT}/usb_device_ch9.c
+            ${NCR2_HARDWARE_USB_OUTPUT}/class/usb_device_class.c
+            ${NCR2_HARDWARE_USB_OUTPUT}/class/usb_device_audio.c
+        )
+        target_sources(
+            ncr2_hardware_audio_app
+            PRIVATE
+                hardware_app/src/usb_audio_capture.c
+                hardware_app/src/usb_audio_descriptor.c
+                hardware_app/src/usb_audio_ring.c
+                ${NCR2_HARDWARE_USB_VENDOR_SOURCES}
+        )
+        target_include_directories(
+            ncr2_hardware_audio_app
+            BEFORE PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/hardware_app/usb
+        )
+        target_include_directories(
+            ncr2_hardware_audio_app
+            SYSTEM PRIVATE
+                ${NCR2_MCUX_SDK_ROOT}/core/components/lists
+                ${NCR2_MCUX_SDK_ROOT}/core/components/osa
+                ${NCR2_HARDWARE_USB_MIDDLEWARE}/include
+                ${NCR2_HARDWARE_USB_MIDDLEWARE}/device
+                ${NCR2_HARDWARE_USB_MIDDLEWARE}/phy
+                ${NCR2_HARDWARE_USB_OUTPUT}
+                ${NCR2_HARDWARE_USB_OUTPUT}/class
+        )
+        target_compile_definitions(
+            ncr2_hardware_audio_app
+            PRIVATE
+                USB_STACK_BM
+                FSL_OSA_BM_TASK_ENABLE=0
+                FSL_OSA_BM_TIMER_CONFIG=0
+                SDK_OS_BAREMETAL
+                DATA_SECTION_IS_CACHEABLE=0
+                NCR2_OPEN_USB_VID=${NCR2_EFFECTIVE_USB_VID}
+                NCR2_OPEN_USB_PID=${NCR2_AUDIO_USB_PID_VALUE}
+                NCR2_ALLOW_BORROWED_NUX_DFU_ID=0
+        )
+        set_source_files_properties(
+            ${NCR2_HARDWARE_USB_VENDOR_SOURCES}
+            PROPERTIES COMPILE_OPTIONS "-w"
+        )
+    endif()
     target_include_directories(
         ncr2_hardware_audio_app
         PRIVATE
@@ -498,6 +601,10 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
     # resulting segment lands in RAM.
     target_link_libraries(ncr2_hardware_audio_app PRIVATE gcc)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(NCR2_HARDWARE_APP_CHECK_OPTIONS)
+    if(NCR2_HARDWARE_APP_USB_AUDIO)
+        list(APPEND NCR2_HARDWARE_APP_CHECK_OPTIONS --usb-audio)
+    endif()
     add_custom_command(
         TARGET ncr2_hardware_audio_app
         POST_BUILD
@@ -505,6 +612,7 @@ if(NCR2_BUILD_HARDWARE_AUDIO_APP)
             ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_hardware_audio_app.py
             --profile ${NCR2_HARDWARE_APP_PROFILE}
+            ${NCR2_HARDWARE_APP_CHECK_OPTIONS}
             $<TARGET_FILE:ncr2_hardware_audio_app>
             ${CMAKE_CURRENT_BINARY_DIR}/ncr2_hardware_audio_app.bin
         VERBATIM

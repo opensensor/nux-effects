@@ -9,6 +9,7 @@
 
 #include "codec_probe.h"
 #include "footswitch_gesture.h"
+#include "usb_audio_capture.h"
 
 #include "boot_recovery_request.h"
 #include "boot_trial.h"
@@ -181,6 +182,8 @@ volatile uint32_t g_hardware_app_open_engine_index;
 volatile uint32_t g_hardware_app_effect_index;
 volatile uint32_t g_hardware_app_factory_request_status;
 volatile uint32_t g_hardware_app_factory_launch_status;
+volatile uint32_t g_hardware_app_usb_audio_status =
+    NCR2_USB_AUDIO_DISABLED;
 static uint32_t g_selector_candidate;
 static uint32_t g_selector_candidate_samples;
 
@@ -2141,6 +2144,8 @@ void ncr2_factory_audio_process_block(
     for (size_t frame = 0U; frame < frames; ++frame) {
         const size_t base = frame * NCR2_FACTORY_AUDIO_SLOTS;
         const int32_t dry = capture_frame(&input[base]);
+        /* A full USB ring drops this copy; it can never stall analog audio. */
+        ncr2_usb_audio_capture_push(dry);
         const int32_t filtered_input = highpass_input(dry);
         const int32_t magnitude =
             (dry == INT32_MIN)
@@ -2429,6 +2434,10 @@ void application_main(void)
             (void)sample_knobs(UINT8_C(1));
         }
         initialize_effect_processor();
+        /* USB capture is optional and deliberately non-fatal. The pedal's
+         * analog path remains usable if no host is attached or USB fails. */
+        g_hardware_app_usb_audio_status =
+            (uint32_t)ncr2_usb_audio_capture_start();
         g_hardware_app_emit_tone = UINT32_C(0);
         g_hardware_app_enable_effect = UINT32_C(0);
         g_hardware_app_ready = UINT32_C(0x46555A5A);

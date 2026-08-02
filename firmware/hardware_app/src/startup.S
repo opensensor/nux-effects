@@ -16,7 +16,18 @@ g_hardware_app_vectors:
     .endr
     /* RT1051 external interrupt 0: shared eDMA channels 0 and 16. */
     .word DMA0_DMA16_IRQHandler
-    .rept 159
+    /* External interrupts 1 through 112 remain unclaimed. */
+    .rept 112
+    .word Default_Handler
+    .endr
+    /* RT1051 external interrupt 113: USB OTG1 device controller. */
+#if NCR2_HARDWARE_APP_USB_AUDIO
+    .word USB_OTG1_IRQHandler
+#else
+    .word Default_Handler
+#endif
+    /* External interrupts 114 through 159 remain unclaimed. */
+    .rept 46
     .word Default_Handler
     .endr
 .size g_hardware_app_vectors, . - g_hardware_app_vectors

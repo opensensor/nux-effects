@@ -1131,6 +1131,22 @@ button:disabled {
   margin: 0;
 }
 
+.signal-row .audio-input-picker {
+  flex: 1.25;
+  min-width: 250px;
+}
+
+.audio-input-control {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.audio-input-control select {
+  flex: 1;
+  min-width: 0;
+}
+
 .signal-row input[type="range"] {
   width: 100%;
   accent-color: var(--accent);

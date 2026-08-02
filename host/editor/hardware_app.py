@@ -347,6 +347,13 @@ ADAPTER_PROLOGUE = '''/*
 #include "factory_audio.h"
 #include "effect_runtime.h"
 
+/* USB capture is an output-only observation point on the device. It has no
+ * bearing on DSP output and is intentionally inert in the host adapter. */
+static void ncr2_usb_audio_capture_push(int32_t dry_sample)
+{
+    (void)dry_sample;
+}
+
 '''
 
 ADAPTER_BRIDGE = '''

@@ -58,7 +58,10 @@ electric guitar recorded directly into an audio interface. It preserves real
 pick attacks, fret transitions, pickup harmonics, and playing dynamics. The
 older physical-model pluck and chord remain explicitly labeled diagnostic
 signals, while file capture, six-second raw microphone capture, and live audio
-interface input allow testing a particular guitar and playing style. Browser
+input allow testing a particular guitar and playing style. The input picker
+lists browser audio devices and automatically prefers **NCR-2 Open Pedal
+Audio** when that normal-application firmware is connected; a user can still
+choose the system default or any other interface explicitly. Browser
 automatic gain control, echo cancellation, and noise suppression are requested
 off for both microphone paths, and captured or uploaded audio is not
 normalized. The Input trim is therefore an explicit part of the audition.
@@ -125,7 +128,7 @@ Both are the same code with the same validation; a host test asserts
 they render identical samples for the same settings.
 
 The **Play live input** control provides continuous guitar monitoring through
-the native firmware C. The browser asks for the raw mono audio-interface input,
+the native firmware C. The browser asks for the selected raw mono audio input,
 sends bounded 1024-frame chunks to a persistent native process on localhost,
 and schedules the returned audio for playback. The process retains tracker,
 delay, envelope, and oscillator state between chunks. This is deliberately the
@@ -138,13 +141,19 @@ queue. Use headphones or mute the direct monitor path to prevent acoustic
 feedback. Closing the page or pressing **Stop live input** terminates the native
 process and releases the audio device.
 
-The pedal's Open Recover HID interface cannot provide live playing: recovery
-mode deliberately does not initialize the analog audio engine, and its USB
-interface carries commands rather than USB Audio. Once an effect is installed,
-the existing application does process the analog guitar input/output in real
-time. Letting this page adjust that running sound requires a separate
-normal-application HID control plane. The proposed block-boundary mailbox,
-commands, and safety rules are specified in
+The intended direct connection is guitar → pedal input and pedal USB-C →
+computer. The separately gated normal hardware application now has a UAC1
+capture path that presents the pedal's dry 48 kHz/24-bit mono input as
+**NCR-2 Open Pedal Audio**; see
+[USB_AUDIO.md](../hardware/USB_AUDIO.md). It is compile-validated but awaits a
+distinct assigned USB product ID and physical enumeration before it is part of
+a pedal release.
+
+Open Recover itself cannot provide live playing: recovery mode deliberately
+does not initialize the analog audio engine, and its HID interface carries
+commands rather than USB Audio. Letting the page adjust the running pedal DSP
+also requires the separate normal-application HID control plane. The proposed
+block-boundary mailbox, commands, and safety rules are specified in
 [OPEN_LIVE_CONTROL_PROTOCOL.md](../protocol/OPEN_LIVE_CONTROL_PROTOCOL.md).
 
 ## Previewing the hardware application's presets

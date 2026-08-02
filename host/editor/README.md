@@ -28,9 +28,12 @@ WebHID-capable Chromium browser and a pedal already running Open Recover.
 - **Preview** — plays the chain's output through the *actual* firmware
   runtime compiled on this machine. The default input is a bundled six-second
   CC0 clean electric-guitar DI performance; synthetic plucks, sine, sweep,
-  noise, an impulse, a file, and the microphone remain available. Optional
-  level matching changes playback gain only, never the rendered samples or
-  measurements. `Space` plays; `B` swaps between dry and processed.
+  noise, an impulse, a file, and live/recorded audio input remain available.
+  The device picker automatically prefers the normal application's
+  `NCR-2 Open Pedal Audio` input when present, enabling guitar → pedal → USB-C
+  preview without a separate interface. Optional level matching changes
+  playback gain only, never the rendered samples or measurements. `Space`
+  plays; `B` swaps between dry and processed.
 - **Effect source** — a compilable ABI template to start from, compiler
   diagnostics with file and line, and a real-time rule scan.
 - **Hardware app presets** — an opt-in toggle that lifts all 32 fixed-point

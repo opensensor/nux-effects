@@ -16,6 +16,7 @@ DTCM_END = 0x20020000
 XIP_START = 0x60000000
 XIP_END = 0x60800000
 DMA0_DMA16_VECTOR_OFFSET = 16 * 4
+USB_OTG1_VECTOR_OFFSET = (16 + 113) * 4
 
 # Enforced for every hardware application regardless of what it exercises.
 COMMON_SYMBOLS = {
@@ -121,7 +122,11 @@ def check_branches(objdump: str, elf: Path) -> None:
             )
 
 
-def check_vectors(binary: Path, found: dict[str, int]) -> None:
+def check_vectors(
+    binary: Path,
+    found: dict[str, int],
+    usb_audio: bool,
+) -> None:
     image = binary.read_bytes()
     if len(image) <= DMA0_DMA16_VECTOR_OFFSET + 4:
         raise CheckError("binary does not contain the DMA vector")
@@ -146,6 +151,33 @@ def check_vectors(binary: Path, found: dict[str, int]) -> None:
         raise CheckError(
             f"DMA vector is {dma:#x}, expected {expected_dma:#x}"
         )
+    if usb_audio:
+        if len(image) <= USB_OTG1_VECTOR_OFFSET + 4:
+            raise CheckError("binary does not contain the USB OTG1 vector")
+        usb = int.from_bytes(
+            image[USB_OTG1_VECTOR_OFFSET:USB_OTG1_VECTOR_OFFSET + 4],
+            "little",
+        )
+        expected_usb = found["USB_OTG1_IRQHandler"] | 1
+        if usb != expected_usb:
+            raise CheckError(
+                f"USB OTG1 vector is {usb:#x}, expected {expected_usb:#x}"
+            )
+
+
+def check_usb_dma(found: dict[str, int]) -> None:
+    for name in ("g_usb_packet", "s_UsbDeviceEhciDtd"):
+        address = found.get(name)
+        if address is None:
+            raise CheckError(f"USB audio DMA object is missing: {name}")
+        if not DTCM_START <= address < DTCM_END:
+            raise CheckError(
+                f"USB audio DMA object {name} is outside DTCM: {address:#x}"
+            )
+    if found["g_usb_packet"] % 4:
+        raise CheckError("USB audio packet buffer is not word-aligned")
+    if found["s_UsbDeviceEhciDtd"] % 32:
+        raise CheckError("EHCI transfer descriptors are not 32-byte aligned")
 
 
 def check_factory_monitor(binary: Path, found: dict[str, int]) -> None:
@@ -213,12 +245,23 @@ def main() -> int:
             "the board sweep and deliberately never start SAI or eDMA"
         ),
     )
+    parser.add_argument(
+        "--usb-audio",
+        action="store_true",
+        help="also enforce the normal-application USB Audio contract",
+    )
     arguments = parser.parse_args()
 
     try:
         check_segments(arguments.prefix + "readelf", arguments.elf)
         found = symbols(arguments.prefix + "nm", arguments.elf)
         required = COMMON_SYMBOLS | PROFILE_SYMBOLS[arguments.profile]
+        if arguments.usb_audio:
+            required = required | {
+                "USB_OTG1_IRQHandler",
+                "ncr2_usb_audio_capture_push",
+                "USB_DeviceAudioSend",
+            }
         missing = sorted(required - found.keys())
         if missing:
             raise CheckError(
@@ -231,7 +274,9 @@ def main() -> int:
                     f"{name} is outside RAM at {found[name]:#x}"
                 )
         check_branches(arguments.prefix + "objdump", arguments.elf)
-        check_vectors(arguments.binary, found)
+        check_vectors(arguments.binary, found, arguments.usb_audio)
+        if arguments.usb_audio:
+            check_usb_dma(found)
         if arguments.profile == "audio":
             check_factory_monitor(arguments.binary, found)
     except (OSError, CheckError) as error:

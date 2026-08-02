@@ -238,6 +238,19 @@
               <option value="mic">Record 6 s from guitar / audio input…</option>
             </select>
           </label>
+          <label class="audio-input-picker">
+            <span>Live / record input</span>
+            <span class="audio-input-control">
+              <select id="audio-input-device">
+                <option value="auto">Auto-detect pedal / system default</option>
+                <option value="default">System default audio input</option>
+              </select>
+              <button type="button" id="refresh-audio-inputs"
+                      class="ghost small" aria-label="Refresh audio inputs">
+                Refresh
+              </button>
+            </span>
+          </label>
           <label class="level">
             <span>Input level <b id="input-level-value">−6 dB</b></span>
             <input
@@ -262,11 +275,12 @@
         <aside class="live-preview-note">
           <b>Stateful native live playing:</b>
           <span>
-            Connect the guitar through a computer audio interface and use
-            headphones to avoid feedback. Each chunk runs through one
-            persistent instance of the real firmware C, so pitch history,
-            envelopes, delays, and control changes are preserved. Open Recover
-            USB remains an updater rather than an audio interface.
+            With the USB Audio hardware app installed, connect guitar → pedal
+            input and pedal USB-C → computer, then select “NCR-2 Open Pedal
+            Audio” above. Each chunk runs through one persistent instance of
+            the real firmware C, so pitch history, envelopes, delays, and
+            control changes are preserved. Use headphones or a muted monitor
+            path to avoid feedback. Open Recover remains updater-only.
           </span>
           <em id="live-input-state">
             Use headphones or a muted monitor path to prevent feedback.
