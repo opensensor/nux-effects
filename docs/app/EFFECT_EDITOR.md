@@ -29,6 +29,22 @@ program or effect that is wrong.
 The browser owns only what the device does not: test-signal generation,
 playback, and drawing.
 
+## Visual effect design
+
+The primary authoring path is a no-code signal chain. A user can start from a
+musical recipe, add validated DSP blocks from the categorized palette, reorder
+them, and adjust controls that are bounded to firmware-safe ranges. The server
+translates that declarative design into an `effect_descriptor_t`; from that
+point onward it goes through the same compiler, real-time source checks,
+registry, native preview, parameter override, and export path as handwritten C.
+
+Every block control becomes a runtime parameter. Current building blocks cover
+level, filtering, drive, gating, envelope swell, tremolo, bounded short delay,
+octave texture, and output limiting. The instrument-voice recipes demonstrate
+how the same pieces can make bowed-string, organ-octave, and sitar-resonator
+starting points. Generated C remains available in a collapsed Advanced drawer,
+but understanding or editing it is not required.
+
 The primary listening signal is not synthesized. The page bundles a
 six-second, 48 kHz mono excerpt from the CC0 GuitarJam dataset: a clean
 electric guitar recorded directly into an audio interface. It preserves real
@@ -49,9 +65,10 @@ Each open position carries a review record: Unreviewed, Keep, Tune, or
 Replace, plus free-form listening notes. Previous/next controls and keyboard
 shortcuts make a complete 32-effect pass practical. The page persists the
 bank, parameters, authored sources, reviews, and current position in local
-browser storage. Exported `ncr2-open-engine-bank` version 2 JSON contains the
-same data and can be imported later or shared for implementation work;
-version 1 bank files remain importable with empty reviews.
+browser storage. Exported `ncr2-open-engine-bank` version 3 JSON contains the
+same data plus editable visual designs and their generated-source ownership.
+Version 1 and 2 bank files remain importable with empty reviews or visual
+designs as appropriate.
 
 Tailwind CSS 4 provides the local interface utility layer, compiled into a
 committed static stylesheet so the editor remains network-independent at
@@ -95,6 +112,21 @@ The generated configuration comes in two shapes:
 
 Both are the same code with the same validation; a host test asserts
 they render identical samples for the same settings.
+
+This is currently live *host parameter reuse*, not continuous live guitar
+monitoring. Selecting the microphone input records a two-second take and then
+runs the exact native firmware render. A guitar connected to an ordinary audio
+interface can therefore be auditioned repeatedly, but the browser is not yet
+an AudioWorklet signal processor.
+
+The pedal's Open Recover HID interface cannot provide live playing: recovery
+mode deliberately does not initialize the analog audio engine, and its USB
+interface carries commands rather than USB Audio. Once an effect is installed,
+the existing application does process the analog guitar input/output in real
+time. Letting this page adjust that running sound requires a separate
+normal-application HID control plane. The proposed block-boundary mailbox,
+commands, and safety rules are specified in
+[OPEN_LIVE_CONTROL_PROTOCOL.md](../protocol/OPEN_LIVE_CONTROL_PROTOCOL.md).
 
 ## Previewing the hardware application's presets
 

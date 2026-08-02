@@ -31,6 +31,7 @@ codegen = _load("codegen")
 builder = _load("builder")
 rt_rules = _load("rt_rules")
 hardware_app = _load("hardware_app")
+visual_effect = _load("visual_effect")
 server = _load("server")
 
 
@@ -229,6 +230,60 @@ class ServerHelperTests(unittest.TestCase):
         self.assertEqual(program.nodes[0].parameters, ((1, 4.0),))
 
 
+class VisualEffectTests(unittest.TestCase):
+    def test_palette_and_recipes_expose_valid_bounded_specs(self):
+        catalog = visual_effect.describe()
+        self.assertGreaterEqual(len(catalog["blocks"]), 10)
+        self.assertGreaterEqual(len(catalog["recipes"]), 6)
+        self.assertEqual(catalog["limits"]["maximum_blocks"], 10)
+        self.assertIn(
+            "Envelope swell",
+            [block["name"] for block in catalog["blocks"]],
+        )
+        self.assertNotIn(
+            "Bit crusher",
+            [block["name"] for block in catalog["blocks"]],
+        )
+        self.assertIn(
+            "Bowed string pad",
+            [recipe["name"] for recipe in catalog["recipes"]],
+        )
+        for recipe in catalog["recipes"]:
+            generated = visual_effect.generate_source(
+                {
+                    "name": recipe["name"],
+                    "effect_id": 0x2100,
+                    "blocks": recipe["blocks"],
+                }
+            )
+            self.assertIn("const effect_descriptor_t", generated["text"])
+            self.assertEqual(
+                rt_rules.scan_source(generated["file_name"], generated["text"]),
+                [],
+            )
+
+    def test_invalid_blocks_and_values_are_rejected(self):
+        base = {"name": "Bad", "effect_id": 0x2101}
+        with self.assertRaisesRegex(ValueError, "unknown type"):
+            visual_effect.generate_source(
+                {**base, "blocks": [{"kind": "teleporter", "values": {}}]}
+            )
+        with self.assertRaisesRegex(ValueError, "outside"):
+            visual_effect.generate_source(
+                {**base, "blocks": [{"kind": "gain", "values": {"gain": 99}}]}
+            )
+        with self.assertRaisesRegex(ValueError, "only once"):
+            visual_effect.generate_source(
+                {
+                    **base,
+                    "blocks": [
+                        {"kind": "short_delay", "values": {}},
+                        {"kind": "short_delay", "values": {}},
+                    ],
+                }
+            )
+
+
 class BrowserBankAndDfuTests(unittest.TestCase):
     def test_page_exposes_four_open_engines_and_bounded_dfu(self):
         page = (EDITOR / "static" / "index.html").read_text()
@@ -245,9 +300,16 @@ class BrowserBankAndDfuTests(unittest.TestCase):
         self.assertIn('id="dfu-install"', page)
         self.assertIn("OPEN_ENGINE_LAYOUT", script)
         self.assertIn('schema: "ncr2-open-engine-bank"', script)
-        self.assertIn("version: 2", script)
+        self.assertIn("version: 3", script)
         self.assertIn("WORKSPACE_STORAGE_KEY", script)
         self.assertIn("clean-guitar-di.wav", script)
+        self.assertIn('id="visual-designer"', page)
+        self.assertIn('id="visual-palette"', page)
+        self.assertIn('id="build-visual-effect"', page)
+        self.assertIn("/api/visual-source", script)
+        self.assertIn("parameter.default_value", script)
+        self.assertIn("canvas.dataset.cssHeight", script)
+        self.assertNotIn('Number(canvas.getAttribute("height"));', script)
         self.assertIn("BEGIN_IMAGE: 2", dfu)
         self.assertIn("ERASE_SLOT: 3", dfu)
         self.assertIn("SET_PENDING: 7", dfu)
@@ -345,6 +407,31 @@ class HostRenderTests(unittest.TestCase):
             [round(value, 6) for value in samples(rendered.audio)],
             [0.5, -0.25],
         )
+
+    def test_visual_slapback_compiles_registers_and_renders(self):
+        recipe = next(
+            item for item in visual_effect.describe()["recipes"]
+            if item["id"] == "slapback"
+        )
+        generated = visual_effect.generate_source(
+            {
+                "name": "Visual Slapback",
+                "effect_id": 0x2201,
+                "blocks": recipe["blocks"],
+            }
+        )
+        source = builder.SourceFile(generated["file_name"], generated["text"])
+        node = codegen.ProgramNode(codegen.VENDOR_OPEN, 0x2201)
+        result = self.build([source], codegen.ProgramSpec("Visual", 9, (node,)))
+        catalog = self.builder.catalog(result.binary)
+        self.assertTrue(catalog.ok, catalog.error)
+        self.assertIn(
+            "Visual Slapback",
+            [effect["name"] for effect in catalog.report["effects"]],
+        )
+        rendered = self.builder.render(result.binary, ramp(4096), 48000, 64, 2)
+        self.assertTrue(rendered.ok, rendered.error)
+        self.assertEqual(rendered.report["nonfinite_samples"], 0)
 
     def test_runtime_overrides_equal_baked_program_values(self):
         program = codegen.ProgramSpec("Chain", 2, (GAIN, CLIP))
@@ -561,6 +648,8 @@ class HardwareAppExtractionTests(unittest.TestCase):
             [preset["name"] for preset in described["presets"]],
             list(hardware_app.PRESET_NAMES),
         )
+        self.assertIn("String Ensemble", hardware_app.PRESET_NAMES)
+        self.assertNotIn("Bit Crush", hardware_app.PRESET_NAMES)
         self.assertEqual(len(set(hardware_app.preset_keys())), 32)
 
     def test_extraction_keeps_the_dsp_and_drops_the_hardware(self):

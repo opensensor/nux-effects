@@ -35,6 +35,7 @@ import builder as builder_module  # noqa: E402
 import codegen  # noqa: E402
 import hardware_app  # noqa: E402
 import rt_rules  # noqa: E402
+import visual_effect  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -295,6 +296,8 @@ class EditorHandler(BaseHTTPRequestHandler):
                 self._handle_session()
             elif path.startswith("/api/template"):
                 self._handle_template()
+            elif path == "/api/visual-effects":
+                self._send_json(visual_effect.describe())
             else:
                 self._send_json({"error": "not found"}, 404)
         except (codegen.CodegenError, ValueError) as error:
@@ -314,6 +317,8 @@ class EditorHandler(BaseHTTPRequestHandler):
                 self._handle_render()
             elif path == "/api/export":
                 self._handle_export()
+            elif path == "/api/visual-source":
+                self._handle_visual_source()
             else:
                 self._send_json({"error": "not found"}, 404)
         except (
@@ -389,6 +394,10 @@ class EditorHandler(BaseHTTPRequestHandler):
                 "text": codegen.effect_template(name, effect_id),
             }
         )
+
+    def _handle_visual_source(self) -> None:
+        request = json.loads(self._read_body() or b"{}")
+        self._send_json(visual_effect.generate_source(request))
 
     def _session_payload(
         self,

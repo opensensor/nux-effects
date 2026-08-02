@@ -31,7 +31,7 @@ const OPEN_ENGINE_LAYOUT = [
     name: "Drive + Dynamics",
     effects: [
       "Shine Drive", "Wall Fuzz", "Rage Drive", "Cocked Wah",
-      "Studio Comp", "Octave Fuzz", "Bit Crush", "Noise Gate",
+      "Studio Comp", "Octave Fuzz", "String Ensemble", "Noise Gate",
     ],
   },
   {
@@ -71,6 +71,9 @@ const state = {
   session: null,
   sources: [],
   activeSource: 0,
+  visualCatalog: null,
+  visualEffects: [],
+  activeVisualEffect: 0,
   catalog: [],
   openEngines,
   activeOpenEngine: 0,
@@ -181,7 +184,7 @@ function hardwarePresetNode(node) {
 function engineBankDocument() {
   return {
     schema: "ncr2-open-engine-bank",
-    version: 2,
+    version: 3,
     workspace: {
       active_engine: state.activeOpenEngine,
       active_effect: state.activeEffectPosition,
@@ -208,6 +211,8 @@ function engineBankDocument() {
       })),
     })),
     sources: state.sources,
+    visual_effects: state.visualEffects,
+    active_visual_effect: state.activeVisualEffect,
   };
 }
 
@@ -243,7 +248,7 @@ function documentNode(node) {
 
 function applyEngineBankDocument(document) {
   if (document?.schema !== "ncr2-open-engine-bank" ||
-      ![1, 2].includes(Number(document.version))) {
+      ![1, 2, 3].includes(Number(document.version))) {
     throw new Error("not a supported NCR-2 open engine bank");
   }
   if (!Array.isArray(document.engine_slots) ||
@@ -296,9 +301,25 @@ function applyEngineBankDocument(document) {
           typeof source?.text !== "string") {
         throw new Error("bank contains an invalid authored source");
       }
-      return { name: source.name, text: source.text };
+      return {
+        name: source.name,
+        text: source.text,
+        ...(typeof source.visualKey === "string"
+          ? { visualKey: source.visualKey }
+          : {}),
+      };
     })
     : [];
+  state.visualEffects = Array.isArray(document.visual_effects)
+    ? document.visual_effects.map(normalizeVisualSpec)
+    : [];
+  state.activeVisualEffect = Math.max(
+    0,
+    Math.min(
+      Math.max(0, state.visualEffects.length - 1),
+      Number(document.active_visual_effect) || 0,
+    ),
+  );
   const workspace = document.workspace ?? {};
   state.activeOpenEngine = Math.max(
     0,
@@ -748,7 +769,18 @@ function applyMonitor() {
 function chartContext(canvas) {
   const ratio = window.devicePixelRatio || 1;
   const width = canvas.clientWidth;
-  const height = Number(canvas.getAttribute("height"));
+  /*
+   * Assigning canvas.height also rewrites the HTML height attribute. Reading
+   * that attribute again on a Retina display multiplied the backing height
+   * on every render (144 -> 288 -> 576...) and eventually exhausted the
+   * widget. Capture the intended CSS height once and never derive it from the
+   * mutable backing-store dimensions again.
+   */
+  const height = Number(
+    canvas.dataset.cssHeight ?? canvas.getAttribute("height") ?? 150,
+  );
+  canvas.dataset.cssHeight = String(height);
+  canvas.style.height = `${height}px`;
   if (canvas.width !== width * ratio || canvas.height !== height * ratio) {
     canvas.width = Math.max(1, Math.floor(width * ratio));
     canvas.height = Math.max(1, Math.floor(height * ratio));
@@ -1616,6 +1648,7 @@ async function importEngineBank(file) {
   renderEngineBank();
   renderChain();
   renderSourceList();
+  renderVisualDesigner();
   await prepareInput();
   await compileSources();
   setStatus(`imported ${file.name}`, "ok");
@@ -1679,6 +1712,17 @@ function parameterControl(node, parameter) {
   const wrapper = document.createElement("div");
   wrapper.className = "parameter";
 
+  /*
+   * A visual design keeps its effect identity while its block schema changes.
+   * During the registry refresh an already-loaded node can therefore see a
+   * newly added parameter before buildVisualEffect replaces the node values.
+   * Materialize the descriptor default instead of formatting `undefined`.
+   */
+  const stored = Number(node.values[parameter.parameter_id]);
+  node.values[parameter.parameter_id] = Number.isFinite(stored)
+    ? stored
+    : parameter.default_value;
+
   const label = document.createElement("span");
   label.className = "parameter-label";
   label.textContent = parameter.name;
@@ -1696,7 +1740,7 @@ function parameterControl(node, parameter) {
 
   const show = () => {
     const current = node.values[parameter.parameter_id];
-    value.textContent = `${current.toFixed(3)} ${parameter.unit}`;
+    value.textContent = `${Number(current).toFixed(3)} ${parameter.unit}`;
   };
   show();
 
@@ -1735,6 +1779,361 @@ function removeNode(index) {
   renderEngineBank();
   persistWorkspace();
   scheduleRender();
+}
+
+/* ------------------------------------------------------------------ */
+/* Visual effect designer                                              */
+/* ------------------------------------------------------------------ */
+
+function visualKey() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `visual-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeVisualSpec(raw) {
+  const effectId = Number(raw?.effect_id ?? raw?.effectId);
+  const blocks = Array.isArray(raw?.blocks) ? raw.blocks : [];
+  return {
+    editor_key: typeof raw?.editor_key === "string"
+      ? raw.editor_key
+      : visualKey(),
+    name: typeof raw?.name === "string" && raw.name.trim()
+      ? raw.name.trim().slice(0, 48)
+      : "My Visual Effect",
+    effect_id: Number.isInteger(effectId) ? effectId : 0x2001,
+    blocks: blocks.map((block) => ({
+      kind: String(block?.kind ?? ""),
+      values: Object.fromEntries(
+        Object.entries(block?.values ?? {})
+          .filter(([, value]) => Number.isFinite(Number(value)))
+          .map(([key, value]) => [key, Number(value)]),
+      ),
+    })),
+  };
+}
+
+function visualDefinition(kind) {
+  return state.visualCatalog?.blocks.find((block) => block.kind === kind);
+}
+
+function nextVisualEffectId() {
+  const used = new Set([
+    ...state.catalog.map((effect) => effect.effect_id),
+    ...state.visualEffects.map((effect) => effect.effect_id),
+  ]);
+  let effectId = 0x2001;
+  while (used.has(effectId)) effectId += 1;
+  return effectId;
+}
+
+function makeVisualEffect() {
+  return {
+    editor_key: visualKey(),
+    name: `Visual Effect ${state.visualEffects.length + 1}`,
+    effect_id: nextVisualEffectId(),
+    blocks: [],
+  };
+}
+
+function currentVisualEffect() {
+  if (state.visualEffects.length === 0) {
+    state.visualEffects.push(makeVisualEffect());
+    state.activeVisualEffect = 0;
+  }
+  return state.visualEffects[state.activeVisualEffect];
+}
+
+function visualBlockValues(definition, overrides = {}) {
+  return Object.fromEntries(definition.controls.map((control) => [
+    control.key,
+    Number(overrides[control.key] ?? control.default),
+  ]));
+}
+
+function addVisualBlock(kind) {
+  const spec = currentVisualEffect();
+  const definition = visualDefinition(kind);
+  if (!definition) return;
+  const maximum = state.visualCatalog?.limits?.maximum_blocks ?? 10;
+  if (spec.blocks.length >= maximum) {
+    setStatus(`visual effects are limited to ${maximum} blocks`, "error");
+    return;
+  }
+  const count = spec.blocks.filter((block) => block.kind === kind).length;
+  if (count >= Number(definition.limit ?? maximum)) {
+    setStatus(`${definition.name} may appear only once`, "error");
+    return;
+  }
+  spec.blocks.push({
+    kind,
+    values: visualBlockValues(definition),
+  });
+  persistWorkspace();
+  renderVisualDesigner();
+}
+
+function useVisualRecipe(recipe) {
+  const spec = currentVisualEffect();
+  spec.name = recipe.name;
+  spec.blocks = recipe.blocks.map((block) => {
+    const definition = visualDefinition(block.kind);
+    return {
+      kind: block.kind,
+      values: visualBlockValues(definition, block.values),
+    };
+  });
+  persistWorkspace();
+  renderVisualDesigner();
+  setStatus(`${recipe.name} loaded — shape it, then build + audition`, "ok");
+}
+
+function moveVisualBlock(index, direction) {
+  const blocks = currentVisualEffect().blocks;
+  const target = index + direction;
+  if (target < 0 || target >= blocks.length) return;
+  [blocks[index], blocks[target]] = [blocks[target], blocks[index]];
+  persistWorkspace();
+  renderVisualDesigner();
+}
+
+function removeVisualBlock(index) {
+  currentVisualEffect().blocks.splice(index, 1);
+  persistWorkspace();
+  renderVisualDesigner();
+}
+
+function visualSliderValue(control, value) {
+  if (control.scale !== "log") return value;
+  const low = Math.log(control.minimum);
+  const high = Math.log(control.maximum);
+  return Math.round(1000 * (Math.log(value) - low) / (high - low));
+}
+
+function visualControlValue(control, sliderValue) {
+  if (control.scale !== "log") return Number(sliderValue);
+  const low = Math.log(control.minimum);
+  const high = Math.log(control.maximum);
+  const raw = Math.exp(low + (high - low) * Number(sliderValue) / 1000);
+  return Math.round(raw / control.step) * control.step;
+}
+
+function visualValueText(control, value) {
+  const digits = control.step < 0.01 ? 3 : control.step < 1 ? 2 : 0;
+  return `${Number(value).toFixed(digits)} ${control.unit}`;
+}
+
+function renderVisualPalette() {
+  dom.visualPalette.replaceChildren();
+  const spec = currentVisualEffect();
+  const maximum = state.visualCatalog?.limits?.maximum_blocks ?? 10;
+  const categories = new Map();
+  (state.visualCatalog?.blocks ?? []).forEach((definition) => {
+    if (!categories.has(definition.category)) {
+      categories.set(definition.category, []);
+    }
+    categories.get(definition.category).push(definition);
+  });
+  categories.forEach((definitions, category) => {
+    const section = document.createElement("section");
+    section.className = "palette-category";
+    const title = document.createElement("h4");
+    title.textContent = category;
+    const options = document.createElement("div");
+    options.className = "palette-options";
+    definitions.forEach((definition) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "palette-block";
+      const used = spec.blocks.filter(
+        (block) => block.kind === definition.kind,
+      ).length;
+      button.disabled = spec.blocks.length >= maximum ||
+        used >= Number(definition.limit ?? maximum);
+      button.title = definition.detail;
+      const name = document.createElement("b");
+      name.textContent = definition.name;
+      const summary = document.createElement("span");
+      summary.textContent = definition.summary;
+      button.append(name, summary);
+      button.addEventListener("click", () => addVisualBlock(definition.kind));
+      options.append(button);
+    });
+    section.append(title, options);
+    dom.visualPalette.append(section);
+  });
+}
+
+function renderVisualRecipes() {
+  dom.visualRecipes.replaceChildren();
+  (state.visualCatalog?.recipes ?? []).forEach((recipe) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "recipe-card";
+    const name = document.createElement("b");
+    name.textContent = recipe.name;
+    const summary = document.createElement("span");
+    summary.textContent = recipe.summary;
+    button.append(name, summary);
+    button.addEventListener("click", () => useVisualRecipe(recipe));
+    dom.visualRecipes.append(button);
+  });
+}
+
+function renderVisualControl(block, definition, control) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "visual-control";
+  const label = document.createElement("label");
+  label.textContent = control.name;
+  const output = document.createElement("output");
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.setAttribute("aria-label", `${definition.name}: ${control.name}`);
+  if (control.scale === "log") {
+    slider.min = "0";
+    slider.max = "1000";
+    slider.step = "1";
+  } else {
+    slider.min = String(control.minimum);
+    slider.max = String(control.maximum);
+    slider.step = String(control.step);
+  }
+  const value = Number(block.values[control.key] ?? control.default);
+  block.values[control.key] = value;
+  slider.value = String(visualSliderValue(control, value));
+  output.value = visualValueText(control, value);
+  slider.addEventListener("input", () => {
+    const next = visualControlValue(control, slider.value);
+    block.values[control.key] = next;
+    output.value = visualValueText(control, next);
+    persistWorkspace();
+  });
+  wrapper.append(label, output, slider);
+  return wrapper;
+}
+
+function renderVisualDesigner() {
+  if (!state.visualCatalog) return;
+  const spec = currentVisualEffect();
+  dom.visualSelect.replaceChildren();
+  state.visualEffects.forEach((effect, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = effect.name;
+    dom.visualSelect.append(option);
+  });
+  dom.visualSelect.value = String(state.activeVisualEffect);
+  dom.visualName.value = spec.name;
+  dom.visualEffectId.value = formatHex(spec.effect_id);
+
+  const maximum = state.visualCatalog.limits.maximum_blocks;
+  dom.visualBudget.textContent = `${spec.blocks.length} / ${maximum} blocks`;
+  const costs = spec.blocks.map(
+    (block) => visualDefinition(block.kind)?.cost,
+  ).filter(Boolean);
+  dom.visualCost.textContent = costs.length
+    ? `Estimated pieces: ${costs.join(" · ")}`
+    : "Add a block or choose a recipe.";
+  dom.visualEmpty.hidden = spec.blocks.length > 0;
+  dom.visualChain.replaceChildren();
+
+  spec.blocks.forEach((block, index) => {
+    const definition = visualDefinition(block.kind);
+    if (!definition) return;
+    const card = document.createElement("article");
+    card.className = "visual-block";
+    const header = document.createElement("div");
+    header.className = "visual-block-head";
+    const title = document.createElement("div");
+    title.className = "visual-block-title";
+    const name = document.createElement("b");
+    name.textContent = `${index + 1} · ${definition.name}`;
+    const detail = document.createElement("span");
+    detail.textContent = definition.detail;
+    title.append(name, detail);
+    const actions = document.createElement("div");
+    actions.className = "visual-block-actions";
+    [
+      ["↑", () => moveVisualBlock(index, -1), index === 0],
+      ["↓", () => moveVisualBlock(index, 1), index === spec.blocks.length - 1],
+      ["✕", () => removeVisualBlock(index), false],
+    ].forEach(([text, handler, disabled]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = text;
+      button.disabled = disabled;
+      button.addEventListener("click", handler);
+      actions.append(button);
+    });
+    header.append(title, actions);
+    const controls = document.createElement("div");
+    controls.className = "visual-controls";
+    definition.controls.forEach((control) => {
+      controls.append(renderVisualControl(block, definition, control));
+    });
+    card.append(header, controls);
+    dom.visualChain.append(card);
+  });
+  renderVisualRecipes();
+  renderVisualPalette();
+}
+
+async function buildVisualEffect() {
+  const spec = currentVisualEffect();
+  if (state.sources.length > 0 && !dom.source.disabled) {
+    state.sources[state.activeSource].text = dom.source.value;
+  }
+  setStatus(`generating ${spec.name}…`, "busy");
+  const generated = await postJson("/api/visual-source", {
+    name: spec.name,
+    effect_id: spec.effect_id,
+    blocks: spec.blocks,
+  });
+  const owned = state.sources.findIndex(
+    (source) => source.visualKey === spec.editor_key,
+  );
+  const collision = state.sources.findIndex(
+    (source, index) => source.name === generated.file_name && index !== owned,
+  );
+  if (collision >= 0) {
+    throw new Error("another authored effect uses that filename; rename this design");
+  }
+  const source = {
+    name: generated.file_name,
+    text: generated.text,
+    visualKey: spec.editor_key,
+  };
+  if (owned >= 0) state.sources[owned] = source;
+  else state.sources.push(source);
+  state.activeSource = owned >= 0 ? owned : state.sources.length - 1;
+  renderSourceList();
+  persistWorkspace();
+
+  const payload = await refreshCatalog();
+  if (!payload.build.ok) {
+    setStatus("generated source did not compile — see advanced output", "error");
+    return;
+  }
+  const effect = state.catalog.find((candidate) =>
+    candidate.vendor_id === state.session.vendor_open &&
+    candidate.effect_id === generated.effect_id);
+  if (!effect) throw new Error("compiled visual effect is missing from registry");
+  const values = Object.fromEntries(effect.parameters.map((parameter) => [
+    parameter.parameter_id,
+    parameter.default_value,
+  ]));
+  state.program.name = generated.name;
+  state.program.nodes = [{
+    vendorId: effect.vendor_id,
+    effectId: effect.effect_id,
+    values,
+  }];
+  query("program-name").value = state.program.name;
+  renderChain();
+  renderEngineBank();
+  persistWorkspace();
+  setStatus(`${generated.name} compiled and loaded into this program`, "ok");
+  scheduleRender();
+  query("preview-title").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderSourceList() {
@@ -1948,6 +2347,15 @@ function bind() {
   dom.dfuInstall = query("dfu-install");
   dom.dfuProgress = query("dfu-progress");
   dom.dfuDetail = query("dfu-detail");
+  dom.visualSelect = query("visual-effect-select");
+  dom.visualName = query("visual-name");
+  dom.visualEffectId = query("visual-effect-id");
+  dom.visualBudget = query("visual-budget");
+  dom.visualCost = query("visual-cost");
+  dom.visualRecipes = query("visual-recipes");
+  dom.visualPalette = query("visual-palette");
+  dom.visualChain = query("visual-chain");
+  dom.visualEmpty = query("visual-empty");
 
   document.querySelectorAll("[data-open-engine]").forEach((button) => {
     button.addEventListener("click", () => selectOpenProgram(
@@ -1992,6 +2400,49 @@ function bind() {
       dom.dfuDetail.textContent = `Install stopped: ${error.message}`;
       updateDfuReady();
     });
+  });
+
+  query("open-visual-designer").addEventListener("click", () => {
+    query("visual-designer").scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  });
+  query("new-visual-effect").addEventListener("click", () => {
+    state.visualEffects.push(makeVisualEffect());
+    state.activeVisualEffect = state.visualEffects.length - 1;
+    persistWorkspace();
+    renderVisualDesigner();
+    dom.visualName.focus();
+    dom.visualName.select();
+  });
+  dom.visualSelect.addEventListener("change", () => {
+    state.activeVisualEffect = Number(dom.visualSelect.value);
+    persistWorkspace();
+    renderVisualDesigner();
+  });
+  dom.visualName.addEventListener("input", () => {
+    currentVisualEffect().name = dom.visualName.value.slice(0, 48);
+    const option = dom.visualSelect.options[state.activeVisualEffect];
+    if (option) option.textContent = dom.visualName.value || "Untitled design";
+    persistWorkspace();
+  });
+  dom.visualEffectId.addEventListener("change", () => {
+    const spec = currentVisualEffect();
+    spec.effect_id = parseNumber(dom.visualEffectId.value, spec.effect_id);
+    dom.visualEffectId.value = formatHex(spec.effect_id);
+    persistWorkspace();
+  });
+  query("build-visual-effect").addEventListener("click", () => {
+    buildVisualEffect().catch((error) => setStatus(error.message, "error"));
+  });
+  query("toggle-source").addEventListener("click", (event) => {
+    const drawer = query("source-drawer");
+    drawer.hidden = !drawer.hidden;
+    event.currentTarget.textContent = drawer.hidden
+      ? "Advanced: show C"
+      : "Advanced: hide C";
+    if (!drawer.hidden) drawer.scrollIntoView({ behavior: "smooth" });
   });
 
   query("new-effect").addEventListener("click", () => {
@@ -2155,11 +2606,15 @@ async function start() {
   updateLevelMatchNote();
 
   try {
-    state.session = await getJson("/api/session");
+    [state.session, state.visualCatalog] = await Promise.all([
+      getJson("/api/session"),
+      getJson("/api/visual-effects"),
+    ]);
   } catch (error) {
     setStatus("cannot reach the editor server", "error");
     return;
   }
+  renderVisualDesigner();
   fillSelect(dom.sampleRate, state.session.sample_rates, state.sampleRate);
   fillSelect(dom.blockFrames, state.session.block_frames, state.blockFrames);
   query("program-id").value = formatHex(state.program.programId);

@@ -495,7 +495,7 @@ enum
     NCR2_EFFECT_COCKED_WAH = 11,
     NCR2_EFFECT_STUDIO_COMP = 12,
     NCR2_EFFECT_OCTAVE_FUZZ = 13,
-    NCR2_EFFECT_BIT_CRUSH = 14,
+    NCR2_EFFECT_STRING_ENSEMBLE = 14,
     NCR2_EFFECT_NOISE_GATE = 15,
 
     /* Engine slot 7: Motion and Pitch. */
@@ -542,7 +542,7 @@ static const uint8_t g_open_engine_effects
         NCR2_EFFECT_COCKED_WAH,
         NCR2_EFFECT_STUDIO_COMP,
         NCR2_EFFECT_OCTAVE_FUZZ,
-        NCR2_EFFECT_BIT_CRUSH,
+        NCR2_EFFECT_STRING_ENSEMBLE,
         NCR2_EFFECT_NOISE_GATE,
     },
     {
@@ -776,8 +776,6 @@ static uint32_t g_selector_ramp = NCR2_PARAMETER_Q15_ONE;
 static uint32_t g_current_effect;
 static uint32_t g_delay_write_index;
 static uint32_t g_cabinet_write_index;
-static uint32_t g_sample_hold_counter;
-static int32_t g_sample_hold_value;
 static int32_t g_multi_state[8];
 static int32_t g_cabinet_history[8];
 static int32_t g_delay_buffer[NCR2_DELAY_BUFFER_FRAMES]
@@ -1025,8 +1023,6 @@ static void reset_transient_effect_state(void)
     g_tremolo_phase = UINT32_C(0);
     g_whammy_phase = UINT32_C(0);
     g_cabinet_write_index = UINT32_C(0);
-    g_sample_hold_counter = UINT32_C(0);
-    g_sample_hold_value = INT32_C(0);
     for (uint32_t index = UINT32_C(0);
          index < UINT32_C(8);
          ++index) {
@@ -1184,8 +1180,8 @@ static int32_t process_selected_effect(
     case NCR2_EFFECT_WALL_FUZZ:
         {
             const uint32_t tone_alpha_q15 =
-                UINT32_C(2200) +
-                (parameters->character_q15 * UINT32_C(12800)) /
+                UINT32_C(1000) +
+                (parameters->character_q15 * UINT32_C(7000)) /
                     NCR2_PARAMETER_Q15_ONE;
             const uint32_t clip_character =
                 UINT32_C(8192) +
@@ -1193,7 +1189,7 @@ static int32_t process_selected_effect(
             const int32_t rounded_input = lowpass_sample(
                 input,
                 &g_effect_pre_state,
-                UINT32_C(18000));
+                UINT32_C(3500));
 
             const int32_t fuzzed = shape_drive(
                 rounded_input,
@@ -1204,8 +1200,8 @@ static int32_t process_selected_effect(
                 blend_samples_q15(
                     input,
                     fuzzed,
-                    UINT32_C(6144)) /
-                INT32_C(2);
+                    UINT32_C(28672)) /
+                INT32_C(4);
         }
         break;
 
@@ -1313,8 +1309,8 @@ static int32_t process_selected_effect(
                 UINT32_C(2200));
             const int32_t edge = input - body;
             const uint32_t edge_gain =
-                UINT32_C(8192) +
-                parameters->character_q15 / UINT32_C(2);
+                UINT32_C(32768) +
+                parameters->character_q15;
             const int32_t tightened =
                 (int32_t)clamp_symmetric(
                     (int64_t)input +
@@ -1338,8 +1334,8 @@ static int32_t process_selected_effect(
                 blend_samples_q15(
                     input,
                     distorted,
-                    UINT32_C(6144)) /
-                INT32_C(2);
+                    UINT32_C(28672)) /
+                INT32_C(4);
         }
         break;
 
@@ -1364,8 +1360,8 @@ static int32_t process_selected_effect(
                 (int64_t)parameters->wah_coefficient_q15 * high /
                     (int64_t)NCR2_PARAMETER_Q15_ONE;
             const uint32_t wet =
-                UINT32_C(24576) +
-                parameters->character_q15 / UINT32_C(4);
+                UINT32_C(28672) +
+                parameters->character_q15 / UINT32_C(8);
             const int32_t resonant = (int32_t)clamp_symmetric(
                 band *
                     (int64_t)(
@@ -1373,8 +1369,10 @@ static int32_t process_selected_effect(
                         parameters->character_q15) /
                     (int64_t)NCR2_PARAMETER_Q15_ONE,
                 INT64_C(2) * (int64_t)NCR2_SAFE_OUTPUT_PEAK);
-            const int32_t filtered =
-                blend_samples_q15(input, resonant, wet);
+            const int32_t filtered = blend_samples_q15(
+                input,
+                resonant,
+                wet);
             const uint32_t wah_drive_q12 =
                 NCR2_DRIVE_Q12_ONE +
                 (parameters->character_q15 * UINT32_C(12288)) /
@@ -1396,10 +1394,10 @@ static int32_t process_selected_effect(
                     (int64_t)wah * INT64_C(2),
                     (int64_t)NCR2_SAFE_OUTPUT_PEAK);
 
-            sample = blend_samples_q15(
-                input,
-                lifted_wah,
-                UINT32_C(16384));
+            sample = clamp_symmetric(
+                (int64_t)blend_samples_q15(input, lifted_wah, wet) *
+                    INT64_C(2),
+                (int64_t)NCR2_SAFE_OUTPUT_PEAK);
         }
         break;
 
@@ -1419,9 +1417,9 @@ static int32_t process_selected_effect(
                 &g_effect_aux_state,
                 coefficient);
             const int64_t threshold =
-                INT64_C(0x01000000) +
+                INT64_C(0x00100000) +
                 ((int64_t)(NCR2_PARAMETER_Q15_ONE -
-                    parameters->amount_q15) * INT64_C(0x03000000)) /
+                    parameters->amount_q15) * INT64_C(0x00800000)) /
                     INT64_C(32768);
             int64_t gain_q15 = INT64_C(32768);
 
@@ -1433,7 +1431,7 @@ static int32_t process_selected_effect(
             }
             const int64_t makeup_q15 =
                 INT64_C(32768) +
-                (int64_t)parameters->amount_q15;
+                (int64_t)parameters->amount_q15 * INT64_C(2);
             sample = clamp_symmetric(
                 (int64_t)input * gain_q15 * makeup_q15 /
                     (INT64_C(32768) * INT64_C(32768)),
@@ -1464,25 +1462,86 @@ static int32_t process_selected_effect(
         }
         break;
 
-    case NCR2_EFFECT_BIT_CRUSH:
+    case NCR2_EFFECT_STRING_ENSEMBLE:
         {
-            const uint32_t hold_frames = UINT32_C(1) +
-                (parameters->amount_q15 * UINT32_C(63)) /
+            /*
+             * A pick-suppressed, octave-rich ensemble voice. This is an
+             * intentionally synthetic instrument transformation rather
+             * than a pitch-tracked sampler: Amount lengthens the bowed
+             * swell and Character opens the body/ensemble brightness.
+             */
+            const int32_t magnitude = (input < INT32_C(0))
+                ? (int32_t)(-(int64_t)input)
+                : input;
+            const int32_t envelope = lowpass_sample(
+                magnitude,
+                &g_effect_aux_state,
+                (magnitude > g_effect_aux_state)
+                    ? UINT32_C(6000)
+                    : UINT32_C(50));
+            const int32_t threshold =
+                INT32_C(0x00040000) +
+                (int32_t)(
+                    ((NCR2_PARAMETER_Q15_ONE -
+                      parameters->amount_q15) *
+                     UINT32_C(0x00180000)) /
+                    NCR2_PARAMETER_Q15_ONE);
+            const int32_t bow_target = (envelope > threshold)
+                ? (int32_t)NCR2_PARAMETER_Q15_ONE
+                : INT32_C(0);
+            const uint32_t bow_attack =
+                UINT32_C(24) +
+                ((NCR2_PARAMETER_Q15_ONE -
+                  parameters->amount_q15) * UINT32_C(120)) /
                     NCR2_PARAMETER_Q15_ONE;
-            const uint32_t discarded_bits = UINT32_C(12) +
-                (parameters->character_q15 * UINT32_C(10)) /
+            const int32_t bow_envelope = lowpass_sample(
+                bow_target,
+                &g_effect_pre_state,
+                (bow_target > g_effect_pre_state)
+                    ? bow_attack
+                    : UINT32_C(8));
+            const uint32_t body_alpha =
+                UINT32_C(2600) +
+                (parameters->character_q15 * UINT32_C(7200)) /
                     NCR2_PARAMETER_Q15_ONE;
-            if (g_sample_hold_counter == UINT32_C(0)) {
-                const int32_t quantum =
-                    INT32_C(1) << (int32_t)discarded_bits;
-                g_sample_hold_value = (input / quantum) * quantum;
-                g_sample_hold_counter = hold_frames;
-            }
-            --g_sample_hold_counter;
-            sample = blend_samples_q15(
+            const int32_t body = lowpass_sample(
                 input,
-                g_sample_hold_value,
-                UINT32_C(24576));
+                &g_effect_tone_state,
+                body_alpha);
+            const int32_t rectified = (input < INT32_C(0))
+                ? (int32_t)(-(int64_t)input)
+                : input;
+            const int32_t octave = rectified - lowpass_sample(
+                rectified,
+                &g_wah_low_state,
+                UINT32_C(420));
+            const int32_t harmonized = blend_samples_q15(
+                body,
+                octave,
+                UINT32_C(12288) +
+                    parameters->character_q15 / UINT32_C(4));
+            const uint32_t sweep = (uint32_t)(
+                triangle_q15(g_vibe_phase) + INT32_C(32768));
+            const uint32_t delay_frames =
+                UINT32_C(480) +
+                (sweep * (UINT32_C(96) +
+                    parameters->character_q15 / UINT32_C(256))) /
+                    UINT32_C(65535);
+            const int32_t ensemble = g_delay_buffer[
+                (g_delay_write_index - delay_frames) &
+                NCR2_DELAY_BUFFER_MASK];
+            const int32_t voice = blend_samples_q15(
+                harmonized,
+                ensemble,
+                UINT32_C(16384) +
+                    parameters->character_q15 / UINT32_C(4));
+
+            g_vibe_phase += parameters->tape_increment;
+            delay_write = harmonized;
+            sample = clamp_symmetric(
+                (int64_t)voice * (int64_t)bow_envelope * INT64_C(6) /
+                    INT64_C(32768),
+                (int64_t)NCR2_SAFE_OUTPUT_PEAK);
         }
         break;
 
@@ -1498,9 +1557,9 @@ static int32_t process_selected_effect(
                     ? UINT32_C(12000)
                     : UINT32_C(160));
             const int32_t threshold =
-                INT32_C(0x00080000) +
+                INT32_C(0x00100000) +
                 (int32_t)(
-                    (parameters->amount_q15 * UINT32_C(0x01800000)) /
+                    (parameters->amount_q15 * UINT32_C(0x02800000)) /
                     NCR2_PARAMETER_Q15_ONE);
             const uint32_t open_target =
                 (envelope > threshold)
@@ -1509,8 +1568,10 @@ static int32_t process_selected_effect(
             const int32_t smoothed_gate = lowpass_sample(
                 (int32_t)open_target,
                 &g_effect_pre_state,
-                UINT32_C(800) +
-                    parameters->character_q15 / UINT32_C(32));
+                (open_target > (uint32_t)g_effect_pre_state)
+                    ? UINT32_C(16000)
+                    : UINT32_C(400) +
+                        parameters->character_q15 / UINT32_C(16));
             sample =
                 (int64_t)input * (int64_t)smoothed_gate /
                 INT64_C(32768);

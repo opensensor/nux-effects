@@ -262,13 +262,351 @@ main {
 /* Engine-bank workspace --------------------------------------- */
 
 .bank-workspace,
-.dfu-panel {
+.dfu-panel,
+.visual-designer {
   width: min(calc(100% - 40px), var(--workspace-width));
   margin: 11px auto 0;
   background: var(--surface-1);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 12px;
+}
+
+/* Visual effect designer -------------------------------------- */
+
+.visual-designer {
+  width: min(calc(100% - 40px), var(--workspace-width));
+  margin: 0 auto 11px;
+  padding: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.visual-title-row {
+  align-items: flex-start;
+}
+
+#visual-effect-select {
+  min-width: 150px;
+  max-width: 220px;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.visual-identity {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.6fr) 1.2fr;
+  gap: 8px;
+  margin: 10px 0 8px;
+}
+
+.visual-identity label,
+.visual-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.visual-budget {
+  justify-content: center;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.visual-budget b {
+  color: var(--text-primary);
+  font: 12px var(--mono);
+}
+
+.visual-budget em {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipe-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 3px 0 9px;
+  scrollbar-width: thin;
+}
+
+.recipe-card {
+  flex: 0 0 auto;
+  min-width: 135px;
+  max-width: 180px;
+  padding: 7px 9px;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+}
+
+.recipe-card b,
+.recipe-card span {
+  display: block;
+}
+
+.recipe-card b {
+  font-size: 11.5px;
+}
+
+.recipe-card span {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  line-height: 1.25;
+}
+
+.visual-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.65fr) minmax(420px, 1.8fr);
+  gap: 9px;
+}
+
+.block-library,
+.visual-signal-path {
+  min-width: 0;
+  padding: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.visual-subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.visual-subhead span {
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+
+.palette-category + .palette-category {
+  margin-top: 9px;
+}
+
+.palette-category > h4 {
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.palette-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.palette-block {
+  min-width: 0;
+  padding: 6px 7px;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+}
+
+.palette-block b,
+.palette-block span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-block b {
+  font-size: 10.5px;
+}
+
+.palette-block span {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.signal-terminal {
+  width: fit-content;
+  margin: 0 auto;
+  padding: 3px 9px;
+  color: var(--series-in);
+  font: 10px var(--mono);
+  background: var(--surface-1);
+  border: 1px solid var(--series-in);
+  border-radius: 999px;
+}
+
+.signal-terminal.output {
+  color: var(--series-out);
+  border-color: var(--series-out);
+}
+
+.visual-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.visual-block {
+  position: relative;
+  padding: 8px 9px;
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+
+.visual-block::before,
+.visual-block::after {
+  position: absolute;
+  left: 50%;
+  width: 1px;
+  height: 7px;
+  content: "";
+  background: var(--line-strong);
+}
+
+.visual-block::before {
+  top: -7px;
+}
+
+.visual-block::after {
+  bottom: -7px;
+}
+
+.visual-block-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.visual-block-title b,
+.visual-block-title span {
+  display: block;
+}
+
+.visual-block-title b {
+  font-size: 12px;
+}
+
+.visual-block-title span {
+  margin-top: 1px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+
+.visual-block-actions {
+  display: flex;
+  gap: 3px;
+}
+
+.visual-block-actions button {
+  padding: 1px 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--line);
+}
+
+.visual-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 5px 10px;
+  margin-top: 7px;
+}
+
+.visual-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.visual-control label {
+  color: var(--text-secondary);
+  font-size: 9.5px;
+}
+
+.visual-control output {
+  color: var(--text-primary);
+  font: 9.5px var(--mono);
+}
+
+.visual-control input {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.visual-empty {
+  margin: 8px 0;
+  padding: 18px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: 7px;
+}
+
+.live-preview-note {
+  display: flex;
+  gap: 6px;
+  margin: 7px 0;
+  padding: 7px 9px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.4;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 7px;
+}
+
+.live-preview-note b {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+}
+
+@media (max-width: 900px) {
+  .visual-identity,
+  .visual-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .visual-controls {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .palette-options,
+  .visual-controls {
+    grid-template-columns: 1fr;
+  }
 }
 
 .engine-slots,

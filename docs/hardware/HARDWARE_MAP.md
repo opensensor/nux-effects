@@ -186,7 +186,7 @@ of stopping at unity.
 | Open engine | Type positions 1–8 |
 |---|---|
 | 5 · Open Amp Studio | Glass Clean, Tweed Bloom, Class A Chime, Brit Stack, Brown Lead, Cali Recto, Bass Forge, Acoustic IR |
-| 6 · Drive + Dynamics | Shine Drive, Wall Fuzz, Rage Drive, Cocked Wah, Studio Comp, Octave Fuzz, Bit Crush, Noise Gate |
+| 6 · Drive + Dynamics | Shine Drive, Wall Fuzz, Rage Drive, Cocked Wah, Studio Comp, Octave Fuzz, String Ensemble, Noise Gate |
 | 7 · Motion + Pitch | Breathe Vibe, Guerrilla Trem, Dimension Chorus, Jet Flanger, Phase Orbit, Rotary Cab, Auto Wah, Whammy Fuzz |
 | 8 · Echo + Space | Echoes Tape, Digital Delay, Analog Delay, Reverse Delay, Hall Reverb, Plate Reverb, Shimmer Space, Spring Tank |
 
@@ -205,11 +205,25 @@ strongest ADC slot per frame and maps Level to 0..2x, putting unity at the
 physical midpoint while retaining a bounded +6 dB trim range.
 
 The two physically preferred modulation slots, Breathe Vibe and Guerrilla
-Trem, remain unchanged. Shine Drive, Wall Fuzz, Rage Drive and Whammy Fuzz
-retain their high internal gain but use a parallel clean attack and a lower
-wet return so they no longer arrive roughly an order of magnitude louder
-than those reference slots. Cocked Wah receives compensating gain before
-its parallel clean blend.
+Trem, remain unchanged. A 2026-08-02 real-guitar audit found that the original
+Drive + Dynamics defaults were too conservative: Wall Fuzz and Rage Drive
+were both mostly clean, while Studio Comp and Noise Gate were almost identical
+to the input over a continuous guitar passage. The revised voices separate
+their jobs deliberately:
+
+- Wall Fuzz is a mostly-wet, heavily driven voice with strong pre-clip and
+  post-clip low-pass filtering for a dense, woolly wall;
+- Rage Drive uses much stronger high-frequency pre-emphasis and a bright hard
+  clipping blend for a tight, biting high-gain sound;
+- Cocked Wah is now predominantly resonant band-pass signal, with enough
+  makeup gain to make the fixed vocal peak obvious;
+- Studio Comp reaches gain reduction at instrument level and restores the
+  lost output with bounded makeup gain;
+- Noise Gate uses a wider threshold range, fast opening, and a character-
+  controlled close so gaps between notes are its audible identity; and
+- the disliked Bit Crush position is replaced by String Ensemble, which
+  suppresses pick attack, adds octave color, and uses a slow dual-voice delay
+  motion to turn the guitar into a bowed synthetic pad.
 
 | Effect | Decay / Amount | Tweak / Character |
 |---|---|---|
@@ -219,6 +233,9 @@ its parallel clean blend.
 | Echoes Tape | delay time, 120 to 625 ms | repeat level, feedback and tape age |
 | Rage Drive | gain, 2x to 40x | thick to tight/biting |
 | Cocked Wah | resonant center frequency | resonance and filter drive |
+| Studio Comp | lower threshold / more sustain | attack and release feel |
+| String Ensemble | bow swell and sensitivity | body brightness and ensemble color |
+| Noise Gate | threshold | release speed |
 | Guerrilla Trem | rate, 1 to 16 Hz | smooth half-depth pulse to hard chop |
 | Whammy Fuzz | dry-to-octave-up blend | clean pitch voice to driven fuzz |
 

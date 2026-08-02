@@ -142,8 +142,8 @@
       <section class="panel shadow-sm" aria-labelledby="registry-title">
         <div class="panel-head">
           <h2 id="registry-title">Registry</h2>
-          <button type="button" id="new-effect" class="primary small">
-            New effect
+          <button type="button" id="open-visual-designer" class="primary small">
+            Design effect
           </button>
         </div>
         <p class="panel-note">
@@ -209,7 +209,7 @@
               <option value="noise">Noise burst</option>
               <option value="impulse">Impulse</option>
               <option value="file">Your guitar recording…</option>
-              <option value="mic">Live guitar / audio input…</option>
+              <option value="mic">Record 2 s from guitar / audio input…</option>
             </select>
           </label>
           <label class="level">
@@ -232,6 +232,17 @@
           </label>
           <input id="file-input" type="file" accept="audio/*" hidden />
         </div>
+
+        <aside class="live-preview-note">
+          <b>Live playing:</b>
+          <span>
+            Open Recover USB is an updater, not an audio interface. Today this
+            page can record a two-second take from an audio interface; an
+            installed open engine still processes the pedal's analog input in
+            real time. Normal-mode USB parameter control is the next firmware
+            transport.
+          </span>
+        </aside>
 
         <figure class="chart">
           <figcaption>
@@ -284,11 +295,88 @@
       </section>
     </main>
 
-    <section class="drawer shadow-sm" aria-labelledby="source-title">
+    <section class="visual-designer shadow-sm ring-1 ring-black/5 dark:ring-white/5"
+             id="visual-designer" aria-labelledby="visual-title">
+      <div class="panel-head visual-title-row">
+        <div>
+          <span class="eyebrow">No code required</span>
+          <h2 id="visual-title">Visual effect designer</h2>
+          <p class="panel-note">
+            Start with a musical recipe or arrange DSP blocks yourself. Every
+            control becomes a safe, previewable firmware parameter.
+          </p>
+        </div>
+        <div class="bank-actions">
+          <select id="visual-effect-select" aria-label="Visual effect design">
+          </select>
+          <button type="button" id="new-visual-effect" class="ghost small">
+            New design
+          </button>
+          <button type="button" id="toggle-source" class="ghost small">
+            Advanced: show C
+          </button>
+          <button type="button" id="build-visual-effect" class="primary">
+            Build + audition here
+          </button>
+        </div>
+      </div>
+
+      <div class="visual-identity">
+        <label>
+          <span>Effect name</span>
+          <input id="visual-name" type="text" value="My Visual Effect" />
+        </label>
+        <label>
+          <span>Effect id</span>
+          <input id="visual-effect-id" type="text" value="0x00002001" />
+        </label>
+        <div class="visual-budget">
+          <span>Design budget</span>
+          <b id="visual-budget">0 / 10 blocks</b>
+          <em id="visual-cost">Add a block or choose a recipe.</em>
+        </div>
+      </div>
+
+      <div class="recipe-strip" id="visual-recipes"
+           aria-label="Starting recipes"></div>
+
+      <div class="visual-grid">
+        <aside class="block-library" aria-labelledby="block-library-title">
+          <div class="visual-subhead">
+            <h3 id="block-library-title">Block library</h3>
+            <span>Click to add</span>
+          </div>
+          <div id="visual-palette"></div>
+        </aside>
+        <div class="visual-signal-path">
+          <div class="visual-subhead">
+            <h3>Signal path</h3>
+            <span>Guitar in → top to bottom → output</span>
+          </div>
+          <div class="signal-terminal">Guitar input</div>
+          <div id="visual-chain" class="visual-chain"></div>
+          <p id="visual-empty" class="visual-empty">
+            Choose a recipe above or add blocks from the library. The block
+            cards explain what each operation does and expose only valid
+            ranges.
+          </p>
+          <div class="signal-terminal output">Effect output</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="drawer shadow-sm" id="source-drawer"
+             aria-labelledby="source-title" hidden>
       <div class="drawer-head">
-        <h2 id="source-title">Effect source</h2>
+        <div>
+          <span class="eyebrow">Advanced</span>
+          <h2 id="source-title">Generated / handwritten C</h2>
+        </div>
         <div class="drawer-controls">
           <select id="source-select" aria-label="Source file"></select>
+          <button type="button" id="new-effect" class="ghost small">
+            New from C template
+          </button>
           <button type="button" id="compile" class="primary small">
             Compile
           </button>
